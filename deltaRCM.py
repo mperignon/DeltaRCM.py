@@ -361,7 +361,7 @@ class model_steps(object):
         # x, y of inlet cells
         bound = self.CTR - round(N0 / 2)
         self.px_start = 0
-        self.py_start = np.arange(bound + 1, bonund + N0 + 1, dtype=np.int)
+        self.py_start = np.arange(bound + 1, bound + N0 + 1, dtype=np.int)
         
         # x, y components of inlet flow direction
         self.dxn_iwalk_inlet = self.dxn_iwalk[0] #x comp of inlet flow direction
@@ -1308,6 +1308,8 @@ class model_steps(object):
     def sand_route(self):
         '''route sand parcels; topo diffusion'''
         
+        theta_sed = self.theta_sand
+        
         for np_sed in xrange(1,int(Np_sed*f_bedload)+1):
         
             self.Vp_res = self.Vp_sed
@@ -1320,7 +1322,8 @@ class model_steps(object):
             self.qs[px,py] = (self.qs[px,py] +
                               self.Vp_res / 2 / self.dt / self.dx)
                               
-            self.sed_parcel(theta_sed,1.px,py)
+            self.sed_parcel(theta_sed,1,px,py)
+            #### MP: originally self.sed_parcel(theta_sed,1.px,py)
             
         print('np_sand = %d' %np_sed)
         
