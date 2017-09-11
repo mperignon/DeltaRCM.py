@@ -42,10 +42,10 @@ class Tools(object):
             ########################################
             # Not calculating water surface profiles
             ########################################
-#             if timestep>0:
-#                 self.get_profiles()
-# 
-#             self.finalize_water_iteration(iteration)
+            if timestep>0:
+                self.get_profiles()
+
+            self.finalize_water_iteration(iteration)
             
 
 #         self.init_sed_timestep()
@@ -55,75 +55,54 @@ class Tools(object):
 
 
 
+
+
+
+
+
+
     #############################################
     ################# water flow ################
     #############################################
 
     def init_water_iteration(self):
 
-        wgt = self.get_wgt()
-
-        for i in range(8):
-            self.wgt_flat[:,i] = wgt[i,:,:].flatten()
 
         self.qxn[:] = 0; self.qyn[:] = 0; self.qwn[:] = 0
 
-        self.indices = np.zeros((self.Np_water, self.size_indices), dtype = np.int)
+        self.indices = np.zeros((self.Np_water, self.size_indices),
+                       dtype = np.int)
+        
+        self.free_surf_flag = np.zeros((self.Np_water,))
         
         
-        self.path_number = np.arange(self.Np_water)
-        self.save_paths = []
+        
+        self.pad_stage = np.pad(self.stage, 1, 'constant',               
+                                constant_values=(0))
+
+
+        self.pad_depth = np.pad(self.depth, 1, 'constant',
+                                constant_values=(0))
+        self.pad_depth[self.pad_depth < 0.01] = np.nan
+        
 
 
 
     def run_water_iteration(self):
     
-    
-        self.free_surf_flag = np.zeros((self.Np_water,))
-    
-        sqrt2 = np.sqrt(2)
-        self.distances = np.array([[sqrt2, 1, sqrt2],
-                                   [1, 1, 1],
-                                   [sqrt2, 1, sqrt2]])
-
-        sqrt05 = np.sqrt(0.5)
-        self.ivec = np.array([[-sqrt05, 0, sqrt05],
-                              [-1, 0, 1],
-                              [-sqrt05, 0, sqrt05]])
-                         
-        self.iwalk = np.array([[-1, 0, 1],
-                               [-1, 0, 1],
-                               [-1, 0, 1]])
-                               
-        self.jvec = np.array([[-sqrt05, -1, -sqrt05],
-                              [0, 0, 0],
-                              [sqrt05, 1, sqrt05]])
-                              
-        self.jwalk = np.array([[-1, -1, -1],
-                               [0, 0, 0],
-                               [1, 1, 1]])
-                               
-                               
-        self.pad_stage = np.pad(self.stage, 1, 'constant',               
-                                constant_values=(0))
-
-        self.pad_depth = np.pad(self.depth, 1, 'constant',
-                                constant_values=(0))
-        self.pad_depth[self.pad_depth < 0.01] = np.nan
-    
-    
+        iter = 0
         start_indices = map(lambda x: self.random_pick_inlet(self.inlet),
                                       range(self.Np_water))
         
         self.qxn.flat[start_indices] += 1
         self.qwn.flat[start_indices] += self.Qp_water / self.dx / 2.
 
-
         self.indices[:,0] = start_indices
+        
         
         current_inds = list(start_indices)
         
-        iter = 0
+        
         
         while sum(current_inds) > 0:
         
@@ -135,7 +114,7 @@ class Tools(object):
             new_cells = map(lambda x: self.get_weight(x)
                             if x != (0,0) else 4, inds_tuple)
             
-        
+
             new_inds = map(lambda x,y: self.calculate_new_ind(x,y)
                             if y != 4 else 0, inds_tuple, new_cells)
                             
@@ -163,6 +142,7 @@ class Tools(object):
         
     def check_for_boundary(self, inds):
     
+        self.free_surf_flag[(self.cell_type.flat[inds] == -1) & (inds > 0)] = 1
         inds[self.cell_type.flat[inds] == -1] = 0
         
         return inds
@@ -204,9 +184,9 @@ class Tools(object):
                 inds[n] = nind
                     
 
-        self.free_surf_flag[looped] = 1
-        
         inds = self.check_for_boundary(inds)
+        
+        self.free_surf_flag[looped] = 0
             
         return inds
         
@@ -259,8 +239,9 @@ class Tools(object):
     
         weight_int = np.maximum(0, (self.qx[ind] * self.jvec +
                                     self.qy[ind] * self.ivec) / self.distances)
-                                    
-        weight_int = weight_int / np.nansum(weight_int)
+        
+        if np.nansum(weight_int) > 0:                           
+            weight_int = weight_int / np.nansum(weight_int)
     
     
         weight = self.gamma * weight_sfc + (1 - self.gamma) * weight_int
@@ -292,21 +273,6 @@ class Tools(object):
 
 
 
-
-    def init_logger(self):
-    
-        self.logger = logging.getLogger("driver")
-        self.logger.setLevel(logging.INFO)
-
-        # create the logging file handler
-        st = timestr = time.strftime("%Y%m%d-%H%M%S")
-        fh = logging.FileHandler("pyDeltaRCM_" + st + ".log")
-
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh.setFormatter(formatter)
-
-        # add handler to logger object
-        self.logger.addHandler(fh)
     
         
 
@@ -360,61 +326,6 @@ class Tools(object):
 
 
 
-
-    #############################################
-    ################## output ###################
-    #############################################            
-    
-
-    def save_figure(self, path, ext='png', close=True):
-        '''
-        Save a figure.
-
-        path : string
-            The path (and filename without extension) to save the figure to.
-        ext : string (default='png')
-            The file extension. This must be supported by the active
-            matplotlib backend (see matplotlib.backends module).  Most
-            backends support 'png', 'pdf', 'ps', 'eps', and 'svg'.
-        '''
-
-        directory = os.path.split(path)[0]
-        filename = "%s.%s" % (os.path.split(path)[1], ext)
-        if directory == '': directory = '.'
-
-        if not os.path.exists(directory):
-            if self.verbose:
-                self.logger.info('Creating output directory')
-            os.makedirs(directory)
-
-        savepath = os.path.join(directory, filename)
-        plt.savefig(savepath)
-
-        if close: plt.close()
-            
-            
-    def save_grids(self, var_name, var, ts):
-        '''
-        Save a grid into an existing netCDF file.
-        File should already be open (by init_output_grid) as self.output_netcdf
-        
-        var_name : string
-                The name of the variable to be saved
-        var : object
-                The numpy array to be saved
-        timestep : int
-                The current timestep (+1, so human readable)
-        '''
-        
-        try:
-            
-            self.output_netcdf.variables[var_name][ts,:,:] = var
-            
-        except:
-            self.logger.info('Error: Cannot save grid to netCDF file.')
-        
-      
-      
                   
 
     #############################################
@@ -423,7 +334,8 @@ class Tools(object):
 
     def build_weight_array(self, array, fix_edges = False, normalize = False):
         '''
-        Create np.array((8,L,W)) of quantity a in each of the neighbors to a cell
+        Create np.array((8,L,W)) of quantity a
+        in each of the neighbors to a cell
         '''
 
         a_shape = array.shape
@@ -475,96 +387,6 @@ class Tools(object):
 
 
 
-    def get_wgt_sfc(self, wet_mask_nh):
-        '''
-        Get np.array((8,L,W)) (H - H_neighbor)/dist
-        for each neighbor around a cell
-
-        Takes an narray of the same size with 1 if wet and 0 if not
-        '''
-
-        wgt_sfc = self.build_weight_array(self.stage, fix_edges = True)
-
-        wgt_sfc = (self.stage - wgt_sfc) / np.array(self.dxn_dist)[:, np.newaxis, np.newaxis]
-
-        wgt_sfc = wgt_sfc * wet_mask_nh
-        wgt_sfc[wgt_sfc<0] = 0
-
-        wgt_sfc_sum = np.sum(wgt_sfc,axis=0)
-        wgt_sfc[:,wgt_sfc_sum>0] = wgt_sfc[:,wgt_sfc_sum>0] / wgt_sfc_sum[wgt_sfc_sum>0]
-
-        return wgt_sfc
-
-
-
-    def get_wgt_int(self, wet_mask_nh):
-        '''
-        Returns np.array((8,L,W)) (qx*dxn_ivec + qy*dxn_jvec)/dist
-        for each neighbor around a cell
-
-        Takes an array of the same size with 1 if wet and 0 if dry
-        '''
-
-        wgt_int = (self.qx * np.array(self.dxn_ivec)[:,np.newaxis,np.newaxis] + \
-            self.qy * np.array(self.dxn_jvec)[:,np.newaxis,np.newaxis]) / \
-            np.array(self.dxn_dist)[:,np.newaxis,np.newaxis]
-
-        wgt_int[1:4,0,:] = 0
-
-        wgt_int = wgt_int * wet_mask_nh
-        wgt_int[wgt_int<0] = 0
-        wgt_int_sum = np.sum(wgt_int, axis=0)
-
-        wgt_int[:,wgt_int_sum>0] = wgt_int[:,wgt_int_sum>0]/wgt_int_sum[wgt_int_sum>0]
-
-        return wgt_int
-
-
-
-    def get_wgt(self):
-        '''
-        Returns np.array((8,L,W)) of the probabilities of flow
-        between a cell and each of its neighbors
-
-        If the probabilities are zero in all directions, they will
-        be split equally among all wet neighbors
-        '''
-
-        wet_mask_nh = self.get_wet_mask_nh()
-        wgt_sfc = self.get_wgt_sfc(wet_mask_nh)
-        wgt_int = self.get_wgt_int(wet_mask_nh)
-
-
-        weight = self.gamma * wgt_sfc + (1-self.gamma) * wgt_int
-
-        wgt = self.build_weight_array(self.depth, fix_edges = True)
-        wgt = wgt**self.theta_water * weight
-
-        wet_mask = 1*(self.depth > self.dry_depth)
-        wgt = wgt * wet_mask
-        wgt[wgt<0] = 0
-        wgt_sum = np.sum(wgt,axis=0)
-        wgt[:,wgt_sum>0] = wgt[:,wgt_sum>0] / wgt_sum[wgt_sum>0]
-
-        # give wet cells with zero wgt to all wet neighbors equal probs for each of them
-        # wet cells with zero probabilities to all neighbors
-        wet_mask = 1*(self.depth > self.dry_depth)
-
-        wet_cells = np.where((wgt_sum + (wet_mask-1)) == 0)
-
-        wet = [(wet_cells[0][i],wet_cells[1][i]) for i in range(len(wet_cells[0]))]
-
-        # new weights to those cells - partitioned equally among the wet neighbors
-        new_vals = [0 if sum(wet_mask_nh[:,i[0],i[1]])==0 else wet_mask_nh[:,i[0],i[1]]/sum(wet_mask_nh[:,i[0],i[1]]) for i in wet]
-
-        for i in range(len(new_vals)):
-            wgt[:,wet[i][0],wet[i][1]] = new_vals[i]
-
-        wgt[1:4,0,:] = 0
-
-        return wgt
-
-
 
 
     #############################################
@@ -602,9 +424,10 @@ class Tools(object):
         '''
         Flood dry cells along the shore if necessary
 
-        Check the neighbors of all dry cells. If any dry cells have wet neighbors
-        Check that their stage is not higher than the bed elevation of the center cell
-        If it is, flood the dry cell
+        Check the neighbors of all dry cells. If any dry cells have wet
+        neighbors, check that their stage is not higher than the bed elevation
+        of the center cell.
+        If it is, flood the dry cell.
         '''
 
         wet_mask = self.depth > self.dry_depth
@@ -622,7 +445,9 @@ class Tools(object):
 
         for i in range(len(shore_ind[0])):
 
-            # pretends dry neighbor cells have stage zero so they cannot be > eta_shore[i]
+            # pretends dry neighbor cells have stage zero
+            # so they cannot be > eta_shore[i]
+            
             stage_nh = wet_mask_nh[:,shore_ind[0][i],shore_ind[1][i]] * \
                 stage_nhs[:,shore_ind[0][i],shore_ind[1][i]]
 
@@ -631,35 +456,10 @@ class Tools(object):
 
 
 
-    def topo_diffusion(self):
-        '''
-        Diffuse topography after routing all coarse sediment parcels
-        '''
-
-        wgt_cell_type = self.build_weight_array(self.cell_type > -2)
-        wgt_qs = self.build_weight_array(self.qs) + self.qs
-        wet_mask_nh = self.get_wet_mask_nh()
-
-        multiplier = self.dt/self.N_crossdiff * self.alpha * 0.5 / self.dx**2
-
-        for n in range(self.N_crossdiff):
-
-            wgt_eta = self.build_weight_array(self.eta) - self.eta
-
-            crossflux_nb = multiplier * wgt_qs * wgt_eta * wet_mask_nh
-            
-            crossflux = np.sum(crossflux_nb, axis=0)
-            
-            self.eta[:] = self.eta + crossflux
-
-
-
     #############################################
     ################# updaters ##################
     #############################################
                 
-                
-    
 
     def update_flow_field(self, iteration):
         '''
@@ -712,19 +512,17 @@ class Tools(object):
 
 
 
-
     def get_profiles(self):
         '''
         Calculate the water surface profiles after routing flow parcels
         Update water surface array
         '''
 
-        paths_for_profile = [i for j in self.save_paths for i in j]
-
-        assert len(paths_for_profile) == len(set(paths_for_profile)), "save_paths has repeats!"
+        paths_for_profile = np.where(self.free_surf_flag == 1)[0]
 
         # get all the unique indices in good paths
-        unique_cells = list(set([j for i in paths_for_profile for j in list(set(self.indices[i]))]))
+        unique_cells = list(set([j for i in paths_for_profile
+                       for j in list(set(self.indices[i]))]))
         try:
             unique_cells.remove(0)
         except:
@@ -732,13 +530,15 @@ class Tools(object):
 
         unique_cells.sort()
 
-        # extract the values needed for the paths -- no need to do this for the entire space
+        # extract the values needed for the paths
+        # no need to do this for the entire space
         uw_unique = self.uw.flat[unique_cells]
         depth_unique = self.depth.flat[unique_cells]
         ux_unique = self.ux.flat[unique_cells]
         uy_unique = self.uy.flat[unique_cells]
 
-        profile_mask = np.add(uw_unique > 0.5*self.u0, depth_unique < 0.1*self.h0)
+        profile_mask = np.add(uw_unique > 0.5*self.u0,
+                              depth_unique < 0.1*self.h0)
 
         all_unique = zip(profile_mask,uw_unique,ux_unique,uy_unique)
 
@@ -772,7 +572,9 @@ class Tools(object):
                 uy_ = [lookup[i][3] for i in sub_path[:-1]]
                 uw_ = [lookup[i][1] for i in sub_path[:-1]]
 
-                dH = self.S0 * (ux_ * path_diff[0] + uy_ * path_diff[1]) * self.dx
+                dH = self.S0 * (ux_ * path_diff[0] +
+                                uy_ * path_diff[1]) * self.dx
+                                
                 dH = [dH[i] / uw_[i] if uw_[i]>0 else 0 for i in range(len(dH))]
                 dH.append(0)
 
@@ -782,6 +584,7 @@ class Tools(object):
 
                 for i in range(len(sub_path)):
                     self.sfc_change[sub_path[i]] += [newH[i],1]
+                    
             except:
                 pass
 
@@ -792,6 +595,8 @@ class Tools(object):
                 stageTemp.flat[k] = v[0]/v[1]
 
         self.stage[:] = self.smoothing_filter(stageTemp)
+
+
 
 
 
@@ -823,7 +628,6 @@ class Tools(object):
 
 
     def import_file(self):
-
 
         self.input_file_vars = dict()
         numvars = 0
@@ -862,15 +666,11 @@ class Tools(object):
                         elif ln[1] == 'no' or ln[1] == 'false':
                             self.input_file_vars[str(ln[0])] = False
                         else:
-                            print "Alert! The option for the 'choice' type variable " \
-                                  "in the input file '" + str(ln[0]) + "' is unrecognized. " \
-                                  "Please use only Yes/No or True/False as values.\n"
+                            print "Alert! Options for 'choice' type variables "\
+                                  "are only Yes/No or True/False.\n"
 
                 else:
-                    print "Alert! The input file contains an unknown entry. The variable '" \
-                          + str(ln[0]) + "' is not an input variable for this model. Check " \
-                          " the spelling of the variable name and only use the symbols : and = " \
-                            "in variable assignments.\n"
+                    print "Alert! The input file contains an unknown entry."
 
         o.close()
         
@@ -881,7 +681,8 @@ class Tools(object):
         
     def set_defaults(self):
     
-        for k,v in self._var_default_map.items(): setattr(self, self._var_name_map[k], v)
+        for k,v in self._var_default_map.items():
+            setattr(self, self._var_name_map[k], v)
 
 
 
@@ -905,47 +706,29 @@ class Tools(object):
         self.g = 9.81   # (gravitation const.)
     
     
-        self.dxn_iwalk = [1,1,0,-1,-1,-1,0,1]
-        self.dxn_jwalk = [0,1,1,1,0,-1,-1,-1]
-        self.dxn_dist = \
-        [sqrt(self.dxn_iwalk[i]**2 + self.dxn_jwalk[i]**2) for i in range(8)]
-    
-        SQ05 = sqrt(0.5)
-        self.dxn_ivec = [0,-SQ05,-1,-SQ05,0,SQ05,1,SQ05]
-        self.dxn_jvec = [1,SQ05,0,-SQ05,-1,-SQ05,0,SQ05]
+        sqrt2 = np.sqrt(2)
+        self.distances = np.array([[sqrt2, 1, sqrt2],
+                                   [1, 1, 1],
+                                   [sqrt2, 1, sqrt2]])
 
-        self.walk_flat = np.array([1, -self.W+1, -self.W, -self.W-1, -1, self.W-1, self.W, self.W+1])
-        self.walk = np.array([[0,1], [-SQ05, SQ05], [-1,0], [-SQ05,-SQ05], 
-                              [0,-1], [SQ05,-SQ05], [1,0], [SQ05,SQ05]])
-    
-    
-    def init_subsidence(self):
-        '''
-        Initializes patterns of subsidence if
-        toggle_subsidence is True (default False)
-        
-        Modify the equations for self.subsidence_mask and self.sigma as desired
-        '''
-    
-        if self.toggle_subsidence:
-        
-            R1 = 0.3 * self.L; R2 = 1. * self.L     # radial limits (fractions of L)
-            theta1 = -pi/3; theta2 =  pi/3.         # angular limits
-            
-            Rloc = np.sqrt((self.y - self.L0)**2 + (self.x - self.W / 2.)**2)
+        sqrt05 = np.sqrt(0.5)
+        self.ivec = np.array([[-sqrt05, 0, sqrt05],
+                              [-1, 0, 1],
+                              [-sqrt05, 0, sqrt05]])
+                         
+        self.iwalk = np.array([[-1, 0, 1],
+                               [-1, 0, 1],
+                               [-1, 0, 1]])
+                               
+        self.jvec = np.array([[-sqrt05, -1, -sqrt05],
+                              [0, 0, 0],
+                              [sqrt05, 1, sqrt05]])
+                              
+        self.jwalk = np.array([[-1, -1, -1],
+                               [0, 0, 0],
+                               [1, 1, 1]])
 
-            thetaloc = np.zeros((self.L, self.W))
-            thetaloc[self.y > self.L0 - 1] = np.arctan((self.x[self.y > self.L0 - 1] - self.W / 2.) /
-                                             (self.y[self.y > self.L0 - 1] - self.L0 + 1))
-            
-            self.subsidence_mask = ((R1 <= Rloc) & (Rloc <= R2) &
-                                    (theta1 <= thetaloc) & (thetaloc <= theta2))
-            
-            self.subsidence_mask[:self.L0,:] = False
-            
-            self.sigma = self.subsidence_mask * self.sigma_max * self.time_step
-
-
+                                   
       
         
     def create_other_variables(self):
@@ -1046,7 +829,6 @@ class Tools(object):
         self.uy = np.zeros((self.L,self.W))
         self.uw = np.zeros((self.L,self.W))
     
-        self.wgt_flat = np.zeros((self.L*self.W, 8))
 
         self.qs = np.zeros((self.L,self.W))
         self.Vp_dep_sand = np.zeros((self.L,self.W))
@@ -1062,7 +844,9 @@ class Tools(object):
         self.cell_type[:self.L0,:] = cell_land
         
         channel_inds = int(self.CTR - round(self.N0 / 2)) - 1
-        self.cell_type[:self.L0, channel_inds:channel_inds + self.N0 + 1] = cell_channel
+        
+        y_channel_max = channel_inds + self.N0 + 1
+        self.cell_type[:self.L0, channel_inds:y_channel_max] = cell_channel
 
         self.stage[:] = np.maximum(0, self.L0 - self.y - 1) * self.dx * self.S0
         self.stage[self.cell_type == cell_ocean] = 0.
@@ -1077,8 +861,9 @@ class Tools(object):
         self.ux[self.depth>0] = self.qx[self.depth>0] / self.depth[self.depth>0]
         self.uy[self.depth>0] = self.qy[self.depth>0] / self.depth[self.depth>0]
         self.uw[self.depth>0] = self.qw[self.depth>0] / self.depth[self.depth>0]
-
-        self.cell_type[self.cell_type == cell_land] = -2   # reset the land cell_type to -2
+        
+        # reset the land cell_type to -2
+        self.cell_type[self.cell_type == cell_land] = -2   
         self.cell_type[-1,:] = cell_edge
         self.cell_type[:,0] = cell_edge
         self.cell_type[:,-1] = cell_edge
@@ -1115,10 +900,12 @@ class Tools(object):
         
             self.n_steps = 10 * self.save_dt
         
-            self.strata_sand_frac = lil_matrix((self.L * self.W, self.n_steps), dtype=np.float32)
+            self.strata_sand_frac = lil_matrix((self.L * self.W, self.n_steps),
+                                                dtype=np.float32)
             
             self.init_eta = self.eta.copy()
-            self.strata_eta = lil_matrix((self.L * self.W, self.n_steps), dtype=np.float32)
+            self.strata_eta = lil_matrix((self.L * self.W, self.n_steps),
+                                          dtype=np.float32)
 
 
     def expand_stratigraphy(self):
@@ -1128,10 +915,12 @@ class Tools(object):
         
         if self.verbose: self.logger.info('Expanding stratigraphy arrays')
         
-        lil_blank = lil_matrix((self.L * self.W, self.n_steps), dtype=np.float32)
+        lil_blank = lil_matrix((self.L * self.W, self.n_steps),
+                                dtype=np.float32)
         
         self.strata_eta = hstack([self.strata_eta, lil_blank], format='lil')
-        self.strata_sand_frac = hstack([self.strata_sand_frac, lil_blank], format='lil')
+        self.strata_sand_frac = hstack([self.strata_sand_frac, lil_blank],
+                                        format='lil')
 
             
         
@@ -1143,9 +932,13 @@ class Tools(object):
         Overwrites an existing netcdf file with the same name
         '''
         
-        if self.save_eta_grids or self.save_depth_grids or self.save_stage_grids or self.save_strata:
+        if (self.save_eta_grids or
+            self.save_depth_grids or
+            self.save_stage_grids or
+            self.save_strata):
         
-            if self.verbose: self.logger.info('Generating netCDF file for output grids...')
+            if self.verbose:
+                self.logger.info('Generating netCDF file for output grids...')
             
             directory = self.prefix
             filename = 'pyDeltaRCM_output.nc'
@@ -1157,13 +950,16 @@ class Tools(object):
             file_path = os.path.join(directory, filename)
 
             if os.path.exists(file_path):
-                if self.verbose: self.logger.info('*** Replaced existing netCDF file ***')
+                if self.verbose:
+                    self.logger.info('*** Replaced existing netCDF file ***')
                 os.remove(file_path)
 
-            self.output_netcdf = Dataset(file_path, 'w', format='NETCDF4_CLASSIC')
+            self.output_netcdf = Dataset(file_path, 'w',
+                                         format='NETCDF4_CLASSIC')
 
             self.output_netcdf.description = 'Output grids from pyDeltaRCM'
-            self.output_netcdf.history = 'Created ' + time_lib.ctime(time_lib.time())
+            self.output_netcdf.history = ('Created ' +
+                                          time_lib.ctime(time_lib.time()))
             self.output_netcdf.source = 'pyDeltaRCM / CSDMS'
 
             length = self.output_netcdf.createDimension('length', self.L)
@@ -1174,7 +970,8 @@ class Tools(object):
 
             x = self.output_netcdf.createVariable('x', 'f4', ('length','width'))
             y = self.output_netcdf.createVariable('y', 'f4', ('length','width'))
-            time = self.output_netcdf.createVariable('time', 'f4', ('total_time',))
+            time = self.output_netcdf.createVariable('time', 'f4',
+                                                    ('total_time',))
 
             x.units = 'meters'
             y.units = 'meters'
@@ -1186,27 +983,57 @@ class Tools(object):
                            
             if self.save_eta_grids:
                 eta = self.output_netcdf.createVariable('eta',
-                                                        'f4',
-                                                        ('total_time','length','width'))
+                                             'f4',
+                                            ('total_time','length','width'))
                 eta.units = 'meters'
                            
                     
             if self.save_stage_grids:
                 stage = self.output_netcdf.createVariable('stage',
-                                                          'f4',
-                                                          ('total_time','length','width'))
+                                             'f4',
+                                            ('total_time','length','width'))
                 stage.units = 'meters'
                            
                     
             if self.save_depth_grids:
                 depth = self.output_netcdf.createVariable('depth',
-                                                          'f4',
-                                                          ('total_time','length','width'))
+                                             'f4',
+                                            ('total_time','length','width'))
                 depth.units = 'meters'
                 
                 
                 
             if self.verbose: self.logger.info('Output netCDF file created.')
+
+
+    
+    
+    def init_subsidence(self):
+        '''
+        Initializes patterns of subsidence if
+        toggle_subsidence is True (default False)
+        
+        Modify the equations for self.subsidence_mask and self.sigma as desired
+        '''
+    
+        if self.toggle_subsidence:
+        
+            R1 = 0.3 * self.L; R2 = 1. * self.L # radial limits (fractions of L)
+            theta1 = -pi/3; theta2 =  pi/3.   # angular limits
+            
+            Rloc = np.sqrt((self.y - self.L0)**2 + (self.x - self.W / 2.)**2)
+
+            thetaloc = np.zeros((self.L, self.W))
+            thetaloc[self.y > self.L0 - 1] = np.arctan(
+                            (self.x[self.y > self.L0 - 1] - self.W / 2.) /
+                            (self.y[self.y > self.L0 - 1] - self.L0 + 1))
+            
+            self.subsidence_mask = ((R1 <= Rloc) & (Rloc <= R2) &
+                                    (theta1 <= thetaloc) & (thetaloc <= theta2))
+            
+            self.subsidence_mask[:self.L0,:] = False
+            
+            self.sigma = self.subsidence_mask * self.sigma_max * self.time_step
 
 
 
@@ -1248,14 +1075,16 @@ class Tools(object):
 
             sand_loc = self.Vp_dep_sand > 0
             sand_frac[sand_loc] = (self.Vp_dep_sand[sand_loc] /
-                                  (self.Vp_dep_mud[sand_loc] + self.Vp_dep_sand[sand_loc]))
+                                  (self.Vp_dep_mud[sand_loc] +
+                                  self.Vp_dep_sand[sand_loc]))
 
             # store indices and sand_frac into a sparse array
             row_s = np.where(sand_frac.flatten() >= 0)[0]
             col_s = np.zeros((len(row_s),))
             data_s = sand_frac[sand_frac >= 0]
 
-            sand_sparse = csc_matrix((data_s, (row_s, col_s)), shape=(self.L * self.W, 1))
+            sand_sparse = csc_matrix((data_s, (row_s, col_s)),
+                                      shape=(self.L * self.W, 1))
 
             # store sand_sparse into strata_sand_frac
             self.strata_sand_frac[:,timestep] = sand_sparse
@@ -1269,13 +1098,15 @@ class Tools(object):
             col_s = np.zeros((len(row_s),))
             data_s = self.eta[diff_eta != 0]
            
-            eta_sparse = csc_matrix((data_s, (row_s, col_s)), shape=(self.L * self.W, 1))
+            eta_sparse = csc_matrix((data_s, (row_s, col_s)),
+                                    shape=(self.L * self.W, 1))
             
             self.strata_eta[:,timestep] = eta_sparse
             
             if self.toggle_subsidence and self.start_subsidence <= timestep:
             
-                sigma_change = self.strata_eta[:,:timestep] - self.sigma.flatten()[:,np.newaxis]
+                sigma_change = (self.strata_eta[:,:timestep] -
+                                self.sigma.flatten()[:,np.newaxis])
                 self.strata_eta[:,:timestep] = lil_matrix(sigma_change)
             
         
@@ -1364,37 +1195,41 @@ class Tools(object):
         if self.save_strata:
         
             if self.verbose:
-                self.logger.info('\nSaving final stratigraphy data to netCDF files...')
+                self.logger.info('\nSaving final stratigraphy to netCDF file')
            
                
             shape = self.strata_eta.shape
            
-            total_strata_age = self.output_netcdf.createDimension('total_strata_age', shape[1])
+            total_strata_age = self.output_netcdf.createDimension(
+                                                            'total_strata_age',
+                                                             shape[1])
             
 
             strata_age = self.output_netcdf.createVariable('strata_age',
-                                                            np.int32,
-                                                            ('total_strata_age'))
+                                                        np.int32,
+                                                        ('total_strata_age'))
             strata_age.units = 'timesteps'
-            self.output_netcdf.variables['strata_age'][:] = range(shape[1]-1, -1, -1)
+            self.output_netcdf.variables['strata_age'][:] = range(shape[1]-1, 
+                                                                  -1, -1)
 
 
             sand_frac = self.output_netcdf.createVariable('strata_sand_frac',
-                                                          np.float32,
-                                                          ('total_strata_age','length','width'))
+                                         np.float32,
+                                        ('total_strata_age','length','width'))
             sand_frac.units = 'fraction'
 
 
             strata_elev = self.output_netcdf.createVariable('strata_depth',
-                                                          np.float32,
-                                                          ('total_strata_age','length','width'))
+                                           np.float32,
+                                          ('total_strata_age','length','width'))
             strata_elev.units = 'meters'
 
 
 
             for i in range(shape[1]):
 
-                sf = self.strata_sand_frac[:,i].toarray().reshape(self.eta.shape)
+                sf = self.strata_sand_frac[:,i].toarray()
+                sf = sf.reshape(self.eta.shape)
                 sf[sf == 0] = -1
 
                 self.output_netcdf.variables['strata_sand_frac'][i,:,:] = sf
@@ -1407,8 +1242,79 @@ class Tools(object):
 
             if self.verbose:
                 self.logger.info('Stratigraphy data saved.')
+
+
+
+
+    #############################################
+    ################## output ###################
+    #############################################            
+    
+
+    def save_figure(self, path, ext='png', close=True):
+        '''
+        Save a figure.
+
+        path : string
+            The path (and filename without extension) to save the figure to.
+        ext : string (default='png')
+            The file extension. This must be supported by the active
+            matplotlib backend (see matplotlib.backends module).  Most
+            backends support 'png', 'pdf', 'ps', 'eps', and 'svg'.
+        '''
+
+        directory = os.path.split(path)[0]
+        filename = "%s.%s" % (os.path.split(path)[1], ext)
+        if directory == '': directory = '.'
+
+        if not os.path.exists(directory):
+            if self.verbose:
+                self.logger.info('Creating output directory')
+            os.makedirs(directory)
+
+        savepath = os.path.join(directory, filename)
+        plt.savefig(savepath)
+
+        if close: plt.close()
+            
+            
+    def save_grids(self, var_name, var, ts):
+        '''
+        Save a grid into an existing netCDF file.
+        File should already be open (by init_output_grid) as self.output_netcdf
+        
+        var_name : string
+                The name of the variable to be saved
+        var : object
+                The numpy array to be saved
+        timestep : int
+                The current timestep (+1, so human readable)
+        '''
+        
+        try:
+            
+            self.output_netcdf.variables[var_name][ts,:,:] = var
+            
+        except:
+            self.logger.info('Error: Cannot save grid to netCDF file.')
+        
+      
+      
         
         
         
-        
+    def init_logger(self):
+    
+        self.logger = logging.getLogger("driver")
+        self.logger.setLevel(logging.INFO)
+
+        # create the logging file handler
+        st = timestr = time.strftime("%Y%m%d-%H%M%S")
+        fh = logging.FileHandler("pyDeltaRCM_" + st + ".log")
+
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+
+        # add handler to logger object
+        self.logger.addHandler(fh)        
         
