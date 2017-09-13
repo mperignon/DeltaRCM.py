@@ -15,7 +15,7 @@ import pdb
     
 #commonly changed inputs        
 f_bedload = 0.5 #% of sand
-totaltimestep = 1000
+totaltimestep = 1
 L = 40  #domain size (# of cells in x-direction); typically on order of 100
 W = 80 #domain size (# of cells in y-direction); W = 2L for semicircle growth
 plotinterval = 10 
@@ -288,7 +288,8 @@ class model_steps(object):
         self.dxn_iwalk = [1,1,0,-1,-1,-1,0,1] #E --> clockwise
         self.dxn_jwalk = [0,1,1,1,0,-1,-1,-1] #E --> clockwise
         
-        self.dxn_dist = [1,SQ2,1,SQ2,1,SQ2,1,SQ2] #E --> clockwise
+        self.dxn_dist = \
+        [m.sqrt(self.dxn_iwalk[i]**2 + self.dxn_jwalk[i]**2) for i in range(8)]
         
         self.wall_flag = np.zeros((L,W))
         self.boundflag = np.zeros((L,W))
@@ -395,36 +396,43 @@ class model_steps(object):
         self.qs = np.zeros((L,W))
         
         
+#         
+#         #####################################################################
+#         #prepare to record strata
+#         #####################################################################
+#         
+#         self.z0 = self.H_SL - self.h0 * strataBtm #bottom layer elevation
+#         
+#         self.dz = 0.01 * self.h0  #layer thickness
+#         
+#         zmax = int(round((self.H_SL +
+#                           self.SLR * totaltimestep * self.dt +
+#                           self.S0 * L / 2 * self.dx -
+#                           self.z0) / self.dz)) # max layer number
+#         
+#         strata0 = -1 # default value of none
+#         
+#         self.strata = np.ones((L, W, zmax)) * strata0
+#         
+#         
+#         
+#         topz = np.zeros((L,W), dtype = np.int) #surface layer number
+#         topz = np.rint((self.eta - self.z0) / self.dz)
+#         topz[topz < 1] = 1
+#         topz[topz > zmax] = zmax
+#         
+#         self.zmax = zmax
+#         self.topz = topz
+#         
+#         self.strata_age = np.zeros((L,W))
+#         self.sand_frac = 0.5 + np.zeros((L,W))
+#         
+#         
+#         
+#         
         
-        #####################################################################
-        #prepare to record strata
-        #####################################################################
-        
-        self.z0 = self.H_SL - self.h0 * strataBtm #bottom layer elevation
-        
-        self.dz = 0.01 * self.h0  #layer thickness
-        
-        zmax = int(round((self.H_SL +
-                          self.SLR * totaltimestep * self.dt +
-                          self.S0 * L / 2 * self.dx -
-                          self.z0) / self.dz)) # max layer number
-        
-        strata0 = -1 # default value of none
-        
-        self.strata = np.ones((L, W, zmax)) * strata0
         
         
-        
-        topz = np.zeros((L,W), dtype = np.int) #surface layer number
-        topz = np.rint((self.eta - self.z0) / self.dz)
-        topz[topz < 1] = 1
-        topz[topz > zmax] = zmax
-        
-        self.zmax = zmax
-        self.topz = topz
-        
-        self.strata_age = np.zeros((L,W))
-        self.sand_frac = 0.5 + np.zeros((L,W))
         
         self.Vp_dep_sand = np.zeros((L,W))
         self.Vp_dep_mud = np.zeros((L,W))
@@ -441,7 +449,6 @@ class model_steps(object):
         
         
         return self.py_start[np.random.randint(0, len(self.py_start))]
-    
     
     
     
@@ -485,6 +492,8 @@ class model_steps(object):
                 
                 istep = self.dxn_iwalk[dxn[k]-1]
                 jstep = self.dxn_jwalk[dxn[k]-1]
+                
+                
                 break
                 
                 
@@ -583,6 +592,10 @@ class model_steps(object):
         if self.prepath_flag[self.px,self.py] == 1 and it > self.L0:
             #if cell has already been visited
             
+            print 'looped!'
+            
+            self.looped += 1
+            
             self.sfccredit = 0
             
             Fx = self.px - 1
@@ -665,6 +678,7 @@ class model_steps(object):
         for k in range(nk):
         
             pxn, pyn, dist = self.nbrs(dxn[k],px,py)
+        
             #calculate weight of each neighbor by direction
             
             
@@ -681,8 +695,6 @@ class model_steps(object):
                                      self.qy[px,py] * self.dxn_jvec[dxn[k]-1])
                                 / dist)
                 #weight based on gravity; water surface slope
-                
-                
                 
                 
         if np.add.reduce(weight_sfc) != 0:
@@ -704,6 +716,7 @@ class model_steps(object):
         
         
         
+        
         for k in range(nk):
         
             pxn, pyn, dist = self.nbrs(dxn[k], px, py)
@@ -714,9 +727,10 @@ class model_steps(object):
             
                 weight[k] = self.h[pxn,pyn]**self.theta_water * weight[k]
                 
-            if weight[k] < 0:
-                pdb.set_trace() #### MP: replace with assertion
-                
+#                 assert weight[dxn[k]] > 0, 'Weight[k] < 0!'
+#                 
+#             if weight[k] < 0:
+#                 pdb.set_trace() #### MP: replace with assertion
                 
                 
         return nk, weight
@@ -726,7 +740,7 @@ class model_steps(object):
        
        
         
-    def route_parcel(self):
+    def route_parcel(self,n):
         '''routes one parcel'''
         
         self.prepath_flag = 0 * self.prepath_flag
@@ -784,6 +798,16 @@ class model_steps(object):
             
             
         pxn,pyn,dist,istep,jstep = outputs
+        
+        inds = []
+
+        for i in range(len(self.iseq)):
+        
+            px = int(self.iseq[i][0])
+            py = int(self.jseq[i][0])
+            inds.append(np.ravel_multi_index((px,py), self.h.shape))
+
+        self.indices[n-1,:] = inds
         
         
         if dist > 0:
@@ -1025,6 +1049,8 @@ class model_steps(object):
     def water_route(self, timestep):
         '''route all water parcels'''
         
+        self.looped = 0
+        
         for itr in range(1, itermax+1):
         
             self.qxn = 0 * self.qxn
@@ -1037,15 +1063,17 @@ class model_steps(object):
             self.sfc_visit = 0 * self.sfc_visit #surface visit
             self.sfc_sum = 0 * self.sfc_sum #surface sum
             
+            self.indices = np.zeros((Np_water, 240), dtype = np.int)
+            
             
             for n in range(1, Np_water+1):
             
-                it = self.route_parcel()
-                self.free_surf(it)
+                it = self.route_parcel(n)
+#                 self.free_surf(it)
                 
             print('np = %d' %n)
             
-            self.update_water(timestep, itr)
+#             self.update_water(timestep, itr)
         
         
         
@@ -1554,8 +1582,8 @@ class model_steps(object):
         '''run one model timestep'''
         
         self.water_route(timestep)
-        self.sed_route()
-        self.update_sed(timestep)
+#         self.sed_route()
+#         self.update_sed(timestep)
 
 
 
@@ -1582,7 +1610,7 @@ class DeltaRCM(model_steps):
     def __init__(self):
         self.setup()   
       
-      
-      
-delta = DeltaRCM()
-delta.run() #run the model
+#       
+#       
+# delta = DeltaRCM()
+# delta.run() #run the model

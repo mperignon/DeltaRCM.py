@@ -42,10 +42,10 @@ class Tools(object):
             ########################################
             # Not calculating water surface profiles
             ########################################
-            if timestep>0:
-                self.get_profiles()
-
-            self.finalize_water_iteration(iteration)
+#             if timestep>0:
+#                 self.get_profiles()
+# 
+#             self.finalize_water_iteration(iteration)
             
 
 #         self.init_sed_timestep()
@@ -83,7 +83,7 @@ class Tools(object):
 
         self.pad_depth = np.pad(self.depth, 1, 'constant',
                                 constant_values=(0))
-        self.pad_depth[self.pad_depth < 0.01] = np.nan
+#         self.pad_depth[self.pad_depth < 0.01] = np.nan
         
 
 
@@ -93,6 +93,7 @@ class Tools(object):
         iter = 0
         start_indices = map(lambda x: self.random_pick_inlet(self.inlet),
                                       range(self.Np_water))
+                                      
         
         self.qxn.flat[start_indices] += 1
         self.qwn.flat[start_indices] += self.Qp_water / self.dx / 2.
@@ -102,18 +103,22 @@ class Tools(object):
         
         current_inds = list(start_indices)
         
-        
+        self.looped = np.zeros((self.Np_water,))
+
         
         while sum(current_inds) > 0:
         
             iter += 1
+            
+            self.check_size_of_indices_matrix(iter)
         
             inds = np.unravel_index(current_inds, self.depth.shape)
             inds_tuple = [(inds[0][i], inds[1][i]) for i in range(len(inds[0]))]
+            
         
             new_cells = map(lambda x: self.get_weight(x)
                             if x != (0,0) else 4, inds_tuple)
-            
+
 
             new_inds = map(lambda x,y: self.calculate_new_ind(x,y)
                             if y != 4 else 0, inds_tuple, new_cells)
@@ -123,18 +128,22 @@ class Tools(object):
                        else 0, current_inds, new_inds, new_cells)
             
             
+            
             new_inds = np.array(new_inds, dtype = np.int)
             new_inds[np.array(dist) == 0] = 0
-            
             
             
             self.indices[:,iter] = new_inds
             
             current_inds = self.check_for_loops(new_inds)
             
+            
+            
+            
             self.indices[:,iter] = current_inds
             
-        
+            current_inds[self.free_surf_flag == 1] = 0
+            
         
         
         
@@ -142,8 +151,9 @@ class Tools(object):
         
     def check_for_boundary(self, inds):
     
-        self.free_surf_flag[(self.cell_type.flat[inds] == -1) & (inds > 0)] = 1
-        inds[self.cell_type.flat[inds] == -1] = 0
+        self.free_surf_flag[(self.cell_type.flat[inds] == -1)] = 1
+        inds[self.free_surf_flag == 1] = 0
+        
         
         return inds
         
@@ -152,12 +162,15 @@ class Tools(object):
     def check_for_loops(self, inds):
     
         looped = [len(i[i>0]) != len(set(i[i>0])) for i in self.indices]
+        
 
-        for n in range(len(looped)):
+        for n in range(self.Np_water):
         
             ind = inds[n]
             
             if looped[n] and (ind > 0):
+            
+                self.looped[n] += 1
         
                 it = np.unravel_index(ind, self.depth.shape)
     
@@ -232,7 +245,11 @@ class Tools(object):
         
         weight_sfc = np.maximum(0,
                      (self.stage[ind] - stage_ind) / self.distances)
-              
+        
+        if ind[0] == 0:
+            weight_sfc[0,:] = 0
+
+        
         if np.nansum(weight_sfc) > 0:
             weight_sfc = weight_sfc / np.nansum(weight_sfc)
     
@@ -240,17 +257,28 @@ class Tools(object):
         weight_int = np.maximum(0, (self.qx[ind] * self.jvec +
                                     self.qy[ind] * self.ivec) / self.distances)
         
+        if ind[0] == 0:
+            weight_int[0,:] = 0
+        
         if np.nansum(weight_int) > 0:                           
             weight_int = weight_int / np.nansum(weight_int)
+            
+            
+        
+        
     
-    
-        weight = self.gamma * weight_sfc + (1 - self.gamma) * weight_int
+        self.weight = self.gamma * weight_sfc + (1 - self.gamma) * weight_int
         
     
         depth_ind = self.pad_depth[ind[0]-1+1:ind[0]+2+1, ind[1]-1+1:ind[1]+2+1]
-        weight_wet = depth_ind ** self.theta_water * weight
         
-        new_cell = self.random_pick(weight_wet)
+        weight_alt = depth_ind ** self.theta_water * self.weight
+        
+        self.weight[depth_ind > 0.01] = weight_alt[depth_ind > 0.01]
+        
+        
+        
+        new_cell = self.random_pick(self.weight)
     
         return new_cell
 
@@ -294,14 +322,14 @@ class Tools(object):
     
         probs[np.isnan(probs)] = 0
 
-        if np.sum(probs) > 0:
+#         if np.sum(probs) > 0:
     
-            cutoffs = np.cumsum(probs)
-            idx = cutoffs.searchsorted(np.random.uniform(0, cutoffs[-1]))
+        cutoffs = np.cumsum(probs)
+        idx = cutoffs.searchsorted(np.random.uniform(0, cutoffs[-1]))
     
-        else:
-    
-            idx = 4
+#         else:
+#     
+#             idx = 4
             
         return idx
 
@@ -882,11 +910,11 @@ class Tools(object):
         
         self.clim_eta = (-self.h0 - 1, 0.05)
         
-        epsilon = 0.000001
-        
-        self.eta[:] = self.eta + np.random.rand(self.L,self.W) * epsilon
-        self.stage[:] = self.stage + np.random.rand(self.L,self.W) * epsilon
-        self.depth[:] = self.depth + np.random.rand(self.L,self.W) * epsilon
+#         epsilon = 0.000001
+#         
+#         self.eta[:] = self.eta + np.random.rand(self.L,self.W) * epsilon
+#         self.stage[:] = self.stage + np.random.rand(self.L,self.W) * epsilon
+#         self.depth[:] = self.depth + np.random.rand(self.L,self.W) * epsilon
         
         
     
@@ -1299,6 +1327,27 @@ class Tools(object):
             self.logger.info('Error: Cannot save grid to netCDF file.')
         
       
+
+
+    def check_size_of_indices_matrix(self, it):
+
+            if it >= self.indices.shape[1]:
+                '''
+                Initial size of self.indices is half of self.itmax
+                because the number of iterations doesn't go beyond
+                that for many timesteps.
+                
+                Once it reaches it > self.itmax/2 once, make the size
+                self.iter for all further timesteps
+                '''
+            
+                if self.verbose:
+                    self.logger.info('Increasing size of self.indices')
+            
+                indices_blank = np.zeros((self.Np_water, self.itmax/4),
+                                          dtype = np.int)
+                self.indices = np.hstack((self.indices, indices_blank))
+                
       
         
         
