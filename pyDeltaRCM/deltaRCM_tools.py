@@ -3,7 +3,6 @@ from math import floor, sqrt, pi
 import numpy as np
 from random import shuffle
 import matplotlib
-matplotlib.use('agg')
 from matplotlib import pyplot as plt
 from scipy import ndimage
 import sys, os, re, string
@@ -26,6 +25,8 @@ class Tools(object):
         Run the time loop once
         '''
         
+        self.Nsmooth = 1
+        
         timestep = self._time
 
         if self.verbose:
@@ -34,6 +35,8 @@ class Tools(object):
 
 
         for iteration in range(self.itermax):
+        
+            self.count = 0
 
             self.init_water_iteration()
             
@@ -44,22 +47,229 @@ class Tools(object):
             ########################################
 #             if timestep>0:
 #                 self.get_profiles()
-# 
+ 
 #             self.finalize_water_iteration(iteration)
-            
 
-#         self.init_sed_timestep()
+            self.free_surf(iteration)
+            self.update_water(timestep, iteration)
+#             
 # 
-#         self.one_coarse_timestep()
-#         self.one_fine_timestep()
+        self.init_sed_timestep()
+
+        self.one_coarse_timestep()
+        self.one_fine_timestep()
 
 
 
 
+    def free_surf(self, it):
+        '''calculate free surface after routing one water parcel'''
+        
+                   
+        Hnew = np.zeros((self.L,self.W))
+                   
+        for n,i in enumerate(self.indices):
+        
+            inds = np.unravel_index(i[i > 0], self.depth.shape)
+            xs = inds[0]
+            ys = inds[1]
+
+            Hnew[:] = 0
+        
+            if ((self.cell_type[xs[-1],ys[-1]] == -1) and
+                (self.looped[n] == 0)):
+#                 (self.free_surf_flag[n] == 1)):
+                
+                self.count += 1
+            
+                Hnew[xs[-1],ys[-1]] = self.H_SL
+                #if cell is in ocean, H = H_SL (downstream boundary condition)
+            
+            
+                it0 = 0
+            
+                for it in xrange(len(xs)-2, -1, -1):
+                    #counting back from last cell visited
+                
+                    i = int(xs[it])
+                    ip = int(xs[it+1])
+                    j = int(ys[it])
+                    jp = int(ys[it+1])
+                    dist = np.sqrt((ip-i)**2 + (jp-j)**2)
+                
+                    if dist > 0:
+                
+                        if it0 == 0:
+                    
+                            if ((self.uw[i,j] > self.u0 * 0.5) or
+                                (self.depth[i,j] < 0.1*self.h0)):
+                                #see if it is shoreline
+                            
+                                it0 = it
+                            
+                            dH = 0
+                        
+                        else:
+                    
+                            if self.uw[i,j] == 0:
+                        
+                                dH = 0
+                                #if no velocity
+                                #no change in water surface elevation
+                            
+                            else:
+                        
+                                dH = (self.S0 *
+                                         (self.ux[i,j] * (ip - i) * self.dx +
+                                          self.uy[i,j] * (jp - j) * self.dx) /
+                                      self.uw[i,j])
+                                      #difference between streamline and parcel path
+                                  
+                    Hnew[i,j] = Hnew[ip,jp] + dH
+                    #previous cell's surface plus difference in H
+                
+                    self.sfc_visit[i,j] = self.sfc_visit[i,j] + 1
+                    #add up # of cell visits
+                
+                    self.sfc_sum[i,j] = self.sfc_sum[i,j] + Hnew[i,j]
+                    # sum of all water surface elevations
 
 
 
 
+    def update_water(self,timestep,itr):
+        '''update surface after routing all parcels
+        ##could divide into 3 functions for cleanliness'''
+        
+        #####################################################################
+        # update free surface
+        #####################################################################
+        
+        Hnew = self.eta + self.depth
+        Hnew[Hnew < self.H_SL] = self.H_SL
+        #water surface height not under sea level
+        
+        
+        Hnew[self.sfc_visit > 0] = (self.sfc_sum[self.sfc_visit > 0] /
+                                    self.sfc_visit[self.sfc_visit > 0])
+        #find average water surface elevation for a cell
+        
+        Hnew_pad = np.pad(Hnew, 1, 'constant',
+                                constant_values=(0))
+        
+        #smooth newly calculated free surface
+        Htemp = Hnew
+        
+        for itsmooth in range(self.Nsmooth):
+        
+            Hsmth = Htemp
+            
+            for i in range(self.L):
+            
+                for j in range(self.W):
+                
+                    if self.cell_type[i,j] > -2:
+                        #locate non-boundary cells
+                    
+                    
+                        sumH = 0
+                        nbcount = 0
+                        
+                        ct_ind = self.pad_cell_type[i-1+1:i+2+1, j-1+1:j+2+1]
+                        Hnew_ind = Hnew_pad[i-1+1:i+2+1, j-1+1:j+2+1]
+                        
+                        Hnew_ind[1,1] = 0
+                        Hnew_ind[ct_ind == -2] = 0
+                        
+                        sumH = np.sum(Hnew_ind)
+                        nbcount = np.sum(Hnew_ind >0)
+
+                                
+                        if nbcount > 0:
+                        
+                            Htemp[i,j] = (self.Csmooth * Hsmth[i,j] +
+                                          (1 - self.Csmooth) * sumH / nbcount)
+                            #smooth if are not wall cells
+                            
+        Hsmth = Htemp
+        
+        
+        
+        if timestep > 0:
+        
+            print 'timeestep', timestep
+        
+            self.stage = (1 - self.omega_sfc) * self.stage + self.omega_sfc * Hsmth
+            #underrelaxation (damping for numerical stability)
+            
+            
+            
+#         self.flood_corr()
+        
+        self.depth = self.stage - self.eta
+        self.depth[self.depth<0] = 0
+        
+        
+        #####################################################################
+        #flow field and velocity field
+        #####################################################################
+        
+        #update flow field
+        dloc = np.sqrt(self.qxn**2 + self.qyn**2)
+        
+        self.qxn[dloc>0] = self.qwn[dloc>0] * self.qxn[dloc>0] / dloc[dloc>0]
+        self.qyn[dloc>0] = self.qwn[dloc>0] * self.qyn[dloc>0] / dloc[dloc>0]
+        
+        
+        if timestep > 0:
+        
+            if itr == 0:
+            
+                self.qx = (self.qxn * self.omega_flow +
+                           self.qx * (1 - self.omega_flow))
+                           
+                self.qy = (self.qyn * self.omega_flow + 
+                           self.qy * (1 - self.omega_flow))
+                
+            else:
+            
+                self.qx = (self.qxn * self.omega_flow_iter +
+                          self.qx * (1 - self.omega_flow_iter))
+                          
+                self.qy = (self.qyn * self.omega_flow_iter +
+                           self.qy * (1 - self.omega_flow_iter))
+                           
+        else:
+        
+            self.qx = self.qxn.copy()
+            self.qy = self.qyn.copy()
+            
+            
+        self.qw = np.sqrt(self.qx**2 + self.qy**2)
+        
+        
+        #apply upstream constant flux boundary condition
+        self.qx.flat[self.inlet] = self.qw0
+        self.qy.flat[self.inlet] = 0
+        self.qw.flat[self.inlet] = self.qw0
+        
+        
+        
+        #update velocity field
+        loc = (self.depth > self.dry_depth) & (self.qw > 0)
+        
+        self.uw[loc] = np.minimum(self.u_max, self.qw[loc] / self.depth[loc])
+        self.ux[loc] = self.uw[loc] * self.qx[loc] / self.qw[loc]
+        self.uy[loc] = self.uw[loc] * self.qy[loc] / self.qw[loc]
+        
+        
+        #set velocity of dry cells to zero
+        self.ux[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0
+        self.uy[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0
+        self.uw[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0   
+        
+        
+        
 
     #############################################
     ################# water flow ################
@@ -69,13 +279,15 @@ class Tools(object):
 
 
         self.qxn[:] = 0; self.qyn[:] = 0; self.qwn[:] = 0
+        
 
         self.indices = np.zeros((self.Np_water, self.size_indices),
                        dtype = np.int)
         
-        self.free_surf_flag = np.zeros((self.Np_water,))
+        self.free_surf_flag = np.zeros((self.Np_water,), dtype=np.int)
         
-        
+        self.sfc_visit = np.zeros_like(self.depth)
+        self.sfc_sum = np.zeros_like(self.depth)
         
         self.pad_stage = np.pad(self.stage, 1, 'constant',               
                                 constant_values=(0))
@@ -84,6 +296,9 @@ class Tools(object):
         self.pad_depth = np.pad(self.depth, 1, 'constant',
                                 constant_values=(0))
 #         self.pad_depth[self.pad_depth < 0.01] = np.nan
+
+        self.pad_cell_type = np.pad(self.cell_type, 1, 'constant',
+                                constant_values=(-2))
         
 
 
@@ -106,7 +321,7 @@ class Tools(object):
         self.looped = np.zeros((self.Np_water,))
 
         
-        while sum(current_inds) > 0:
+        while (sum(current_inds) > 0) & (iter < self.itmax):
         
             iter += 1
             
@@ -135,31 +350,39 @@ class Tools(object):
             
             self.indices[:,iter] = new_inds
             
-            current_inds = self.check_for_loops(new_inds)
+            current_inds = self.check_for_loops(new_inds, iter)
             
             
+            current_inds = self.check_for_boundary(current_inds)
             
             
             self.indices[:,iter] = current_inds
             
-            current_inds[self.free_surf_flag == 1] = 0
+            
+            
+            current_inds[self.free_surf_flag > 0] = 0
             
         
-        
+        print iter
         
         
         
     def check_for_boundary(self, inds):
     
-        self.free_surf_flag[(self.cell_type.flat[inds] == -1)] = 1
-        inds[self.free_surf_flag == 1] = 0
+        self.free_surf_flag[(self.cell_type.flat[inds] == -1) & (self.free_surf_flag == 0)] = 1
+        
+        self.free_surf_flag[(self.cell_type.flat[inds] == -1) & (self.free_surf_flag == -1)] = 2
+        
+        inds[self.free_surf_flag == 2] = 0
+        
+#         inds[self.free_surf_flag == 1] = 0
         
         
         return inds
         
         
         
-    def check_for_loops(self, inds):
+    def check_for_loops(self, inds, it):
     
         looped = [len(i[i>0]) != len(set(i[i>0])) for i in self.indices]
         
@@ -168,14 +391,14 @@ class Tools(object):
         
             ind = inds[n]
             
-            if looped[n] and (ind > 0):
+            if (looped[n]) and (ind > 0) and (it > self.L0):
             
                 self.looped[n] += 1
         
                 it = np.unravel_index(ind, self.depth.shape)
     
-                px = it[1]
-                py = it[0]
+                px = it[0]
+                py = it[1]
     
                 Fx = px - 1
                 Fy = py - self.CTR
@@ -183,8 +406,8 @@ class Tools(object):
                 Fw = np.sqrt(Fx**2 + Fy**2)
         
                 if Fw != 0:
-                    px = px + np.round(Fx / Fw * 5)
-                    py = py + np.round(Fy / Fw * 5)
+                    px = px + np.round(Fx / Fw * 5.)
+                    py = py + np.round(Fy / Fw * 5.)
             
                 px = max(px, self.L0)
                 px = int(min(self.L - 2, px))
@@ -195,11 +418,10 @@ class Tools(object):
                 nind = np.ravel_multi_index((px,py), self.depth.shape)
                 
                 inds[n] = nind
+                
+                self.free_surf_flag[n] = -1
                     
-
-        inds = self.check_for_boundary(inds)
         
-        self.free_surf_flag[looped] = 0
             
         return inds
         
@@ -249,16 +471,24 @@ class Tools(object):
         if ind[0] == 0:
             weight_sfc[0,:] = 0
 
-        
-        if np.nansum(weight_sfc) > 0:
-            weight_sfc = weight_sfc / np.nansum(weight_sfc)
-    
-    
+
         weight_int = np.maximum(0, (self.qx[ind] * self.jvec +
                                     self.qy[ind] * self.ivec) / self.distances)
         
         if ind[0] == 0:
             weight_int[0,:] = 0
+        
+        
+        depth_ind = self.pad_depth[ind[0]-1+1:ind[0]+2+1, ind[1]-1+1:ind[1]+2+1]
+        ct_ind = self.pad_cell_type[ind[0]-1+1:ind[0]+2+1, ind[1]-1+1:ind[1]+2+1]
+        
+        weight_sfc[(depth_ind <= self.dry_depth) | (ct_ind == -2)] = 0
+        weight_int[(depth_ind <= self.dry_depth) | (ct_ind == -2)] = 0
+        
+        
+        
+        if np.nansum(weight_sfc) > 0:
+            weight_sfc = weight_sfc / np.nansum(weight_sfc)
         
         if np.nansum(weight_int) > 0:                           
             weight_int = weight_int / np.nansum(weight_int)
@@ -270,12 +500,14 @@ class Tools(object):
         self.weight = self.gamma * weight_sfc + (1 - self.gamma) * weight_int
         
     
-        depth_ind = self.pad_depth[ind[0]-1+1:ind[0]+2+1, ind[1]-1+1:ind[1]+2+1]
+        
         
         weight_alt = depth_ind ** self.theta_water * self.weight
         
-        self.weight[depth_ind > 0.01] = weight_alt[depth_ind > 0.01]
+        self.weight[depth_ind > self.dry_depth] = weight_alt[depth_ind > self.dry_depth]
         
+        
+        self.weight[depth_ind <= self.dry_depth] = np.nan
         
         
         new_cell = self.random_pick(self.weight)
@@ -299,10 +531,294 @@ class Tools(object):
         self.update_velocity_field()
 
 
+    #############################################
+    ################# sed flow ##################
+    #############################################
+
+    def init_sed_timestep(self):
+        '''
+        Set up arrays to start sed routing timestep
+        '''
+
+        self.qs[:] = 0
+        self.Vp_dep_sand[:] = 0
+        self.Vp_dep_mud[:] = 0
 
 
+
+    def one_fine_timestep(self):
+        '''
+        Route all parcels of fine sediment
+        '''
+
+        self.num_fine = int(self.Np_sed - self.num_coarse)
+
+        if self.num_fine>0:
+
+            these_indices = map(lambda x: self.random_pick_inlet(self.inlet),range(self.num_fine))
+            
+            self.indices = np.zeros((self.num_fine, self.itmax), dtype=np.int)
+            self.indices[:,0] = these_indices
+
+            path_number = np.arange(self.num_fine)
+            self.Vp_res = np.zeros((self.Np_sed,)) + self.Vp_sed
+            self.qs.flat[these_indices] += self.Vp_res[path_number]/2./self.dt/self.dx
+
+            sed_continue = True
+            it = 0
+
+            while sed_continue:
+
+                weight = self.get_sed_weight()
+
+                ngh = map(self.random_pick_flat, weight[these_indices])
+                new_indices = these_indices + self.walk_flat[ngh]
+                new_ind_type = self.cell_type.flat[new_indices]
+
+                Vp_res_update = self.Vp_res[path_number]/2./self.dt/self.dx
+                self.qs.flat[these_indices] += Vp_res_update
+                self.qs.flat[new_indices] += Vp_res_update
+
+
+                these_indices = new_indices[new_ind_type >= 0]
+                path_number = path_number[new_ind_type >= 0]
+
+                if len(path_number)>0:
+                    # check for looping
+                    keeper = np.ones((len(these_indices),), dtype=np.int)
+                    for i in range(len(these_indices)):
+                        if np.in1d(self.indices[path_number[i],:], these_indices[i]).any():
+                            keeper[i] = 0
+                        if these_indices[i]<0:
+                            keeper[i] = 0
+                    if np.min(keeper)==0:
+                        these_indices = these_indices[keeper == 1]
+                        path_number = path_number[keeper == 1]
+
+                # save to the master indices
+                it += 1
+                self.indices[path_number,it] = these_indices
+
+                UW_loc = self.uw.flat[these_indices]
+                if (UW_loc < self.U_dep_mud).any():
+
+                    update_ind = these_indices[UW_loc < self.U_dep_mud]
+                    update_path = path_number[UW_loc < self.U_dep_mud]
+
+                    Vp_res_ = (self.sed_lag * self.Vp_res[update_path] *
+                    (self.U_dep_mud**self.beta - self.uw.flat[update_ind]**self.beta) /
+                    (self.U_dep_mud**self.beta))
+
+                    self.Vp_dep = (self.stage.flat[update_ind] - self.eta.flat[update_ind])/4. * self.dx**2
+                    self.Vp_dep = np.array([min((Vp_res_[i],self.Vp_dep[i])) for i in range(len(self.Vp_dep))])
+                    
+                    self.Vp_dep_mud.flat[update_ind] += self.Vp_dep
+
+                    self.Vp_res[update_path] -= self.Vp_dep
+
+                    self.eta.flat[update_ind] += self.Vp_dep / self.dx**2
+                    
+                    self.depth.flat[update_ind] = self.stage.flat[update_ind] - self.eta.flat[update_ind]
+                    
+                    update_uw = [min(self.u_max, self.qw.flat[i]/self.depth.flat[i]) for i in update_ind]
+                    self.uw.flat[update_ind] = update_uw
+
+                    update_uwqw = [self.uw.flat[i]/self.qw.flat[i] if self.qw.flat[i]>0 else 0 for i in update_ind]
+                    
+                    self.ux.flat[update_ind] = self.qx.flat[update_ind] * update_uwqw
+                    self.uy.flat[update_ind] = self.qy.flat[update_ind] * update_uwqw
+
+
+
+                if (UW_loc > self.U_ero_mud).any():
+
+                    update_ind = these_indices[UW_loc > self.U_ero_mud]
+                    update_path = path_number[UW_loc > self.U_ero_mud]
+
+                    Vp_res_ = self.Vp_sed * (self.uw.flat[update_ind]**self.beta - self.U_ero_mud**self.beta) / (self.U_ero_mud**self.beta)
+                    self.Vp_ero = (self.stage.flat[update_ind] - self.eta.flat[update_ind])/4. * self.dx**2
+                    self.Vp_ero = np.array([min((Vp_res_[i],self.Vp_ero[i])) for i in range(len(self.Vp_ero))])
+
+                    self.eta.flat[update_ind] -= self.Vp_ero / self.dx**2
+
+                    self.depth.flat[update_ind] = self.stage.flat[update_ind] - self.eta.flat[update_ind]
+                    update_uw = [min(self.u_max, self.qw.flat[i]/self.depth.flat[i]) for i in update_ind]
+                    self.uw.flat[update_ind] = update_uw
+
+                    update_uwqw = [self.uw.flat[i]/self.qw.flat[i] if self.qw.flat[i]>0 else 0 for i in update_ind]
+                    self.ux.flat[update_ind] = self.qx.flat[update_ind] * update_uwqw
+                    self.uy.flat[update_ind] = self.qy.flat[update_ind] * update_uwqw
+
+                    self.Vp_res[update_path] += self.Vp_ero
+
+
+                if it == self.itmax-1 or len(these_indices)==0:
+                    sed_continue = False
+
+
+
+    def one_coarse_timestep(self):
+        '''
+        Route all parcels of coarse sediment
+        '''
+
+        self.num_coarse = int(round(self.Np_sed*self.f_bedload))
+
+        if self.num_coarse>0:
+
+            these_indices = map(lambda x: self.random_pick_inlet(self.inlet),range(self.num_coarse))
+
+            self.indices = np.zeros((self.num_coarse,self.itmax), dtype=np.int)
+            self.indices[:,0] = these_indices
+
+            path_number = np.arange(self.num_coarse)
+            self.Vp_res = np.zeros((self.Np_sed,)) + self.Vp_sed
+            self.qs.flat[these_indices] += self.Vp_res[path_number]/2./self.dt/self.dx
+
+            sed_continue = True
+            it = 0
+
+            while sed_continue:
+
+                weight = self.get_sed_weight()
+
+                ngh = map(self.random_pick_flat, weight[these_indices])
+                new_indices = these_indices + self.walk_flat[ngh]
+                new_ind_type = self.cell_type.flat[new_indices]
+
+                self.qs.flat[these_indices] += self.Vp_res[path_number]/2./self.dt/self.dx
+                self.qs.flat[new_indices] += self.Vp_res[path_number]/2./self.dt/self.dx
+
+                these_indices = new_indices[new_ind_type >= 0]
+                path_number = path_number[new_ind_type >= 0]
+
+                if len(path_number)>0:
+                    # check for looping
+                    keeper = np.ones((len(these_indices),), dtype=np.int)
+                    for i in range(len(these_indices)):
+                        if np.in1d(self.indices[path_number[i],:], these_indices[i]).any():
+                            keeper[i] = 0
+                        if these_indices[i]<0:
+                            keeper[i] = 0
+                    if np.min(keeper)==0:
+                        these_indices = these_indices[keeper == 1]
+                        path_number = path_number[keeper == 1]
+
+                it += 1
+                self.indices[path_number,it] = these_indices
+
+                qs_cap = self.qs0 * self.f_bedload/self.u0**self.beta * self.uw.flat[these_indices]**self.beta
+
+                qs_loc = self.qs.flat[these_indices]
+
+                if (qs_loc > qs_cap).any():
+                
+
+                    update_ind = these_indices[qs_loc > qs_cap]
+                    update_path = path_number[qs_loc > qs_cap]
+                    Vp_res_ = self.Vp_res[update_path]
+
+                    self.Vp_dep = self.depth.flat[update_ind]/4.* self.dx**2
+                    self.Vp_dep = np.minimum(Vp_res_, self.Vp_dep)
+             
+                    self.Vp_res[update_path] -= self.Vp_dep
+
+                    eta_change = self.Vp_dep / self.dx**2
+                    self.eta.flat[update_ind] += eta_change
+                    
+                    self.depth.flat[update_ind] = self.stage.flat[update_ind] - self.eta.flat[update_ind]
+
+                    update_uw = [min(self.u_max, self.qw.flat[i]/self.depth.flat[i]) for i in update_ind]
+                    self.uw.flat[update_ind] = update_uw
+
+                    update_uwqw = [self.uw.flat[i]/self.qw.flat[i] if self.qw.flat[i]>0 else 0 for i in update_ind]
+                    self.ux.flat[update_ind] = self.qx.flat[update_ind] * update_uwqw
+                    self.uy.flat[update_ind] = self.qy.flat[update_ind] * update_uwqw
+                    
+
+
+                if ((qs_loc < qs_cap) * (self.uw.flat[these_indices] > self.U_ero_sand)).any():
+                
+
+                    update_ind = these_indices[(qs_loc < qs_cap) * (self.uw.flat[these_indices] > self.U_ero_sand)]
+                    update_path = path_number[(qs_loc < qs_cap) * (self.uw.flat[these_indices] > self.U_ero_sand)]
+
+                    Vp_res_ = self.Vp_sed * (self.uw.flat[update_ind]**self.beta - self.U_ero_sand**self.beta) / (self.U_ero_sand**self.beta)
+                    
+                    
+                    Vp_ero_ = self.depth.flat[update_ind]/4. * self.dx**2
+                    self.Vp_ero = np.minimum(Vp_res_,Vp_ero_)
+                    
+
+                    eta_change = self.Vp_ero / self.dx**2
+                    self.eta.flat[update_ind] -= eta_change
+                    self.depth.flat[update_ind] = self.stage.flat[update_ind] - self.eta.flat[update_ind]
+
+
+                    update_uw = [min(self.u_max, self.qw.flat[i]/self.depth.flat[i]) for i in update_ind]
+                    self.uw.flat[update_ind] = update_uw
+
+                    update_uwqw = [self.uw.flat[i]/self.qw.flat[i] if self.qw.flat[i]>0 else 0 for i in update_ind]
+                    self.ux.flat[update_ind] = self.qx.flat[update_ind] * update_uwqw
+                    self.uy.flat[update_ind] = self.qy.flat[update_ind] * update_uwqw
+
+                    self.Vp_res[update_path] += self.Vp_ero
+                    
+
+
+                if it == self.itmax-1 or len(these_indices)==0:
+                    sed_continue = False
+
+        self.topo_diffusion()
+
+
+    def get_sed_weight(self):
+        '''
+        Get np.array((8,L,W)) of probability field of routing to neighbors
+        for sediment parcels
+        '''
+
+        wet_mask_nh = self.get_wet_mask_nh()
+
+        weight = self.get_wgt_int(wet_mask_nh) * \
+            self.depth**self.theta_sand * wet_mask_nh
+
+        weight[weight<0] = 0.
+        weight_sum = np.sum(weight,axis=0)
+        weight[:,weight_sum>0] = weight[:,weight_sum>0] / weight_sum[weight_sum>0]
+
+        weight_f = np.zeros((self.L*self.W, 8))
+
+        for i in range(8):
+            weight_f[:,i] = weight[i,:,:].flatten()
+
+        return weight_f
     
-        
+    
+    
+    
+    
+    def get_wgt_int(self, wet_mask_nh):
+        '''
+        Returns np.array((8,L,W)) (qx*dxn_ivec + qy*dxn_jvec)/dist
+        for each neighbor around a cell
+
+        Takes an array of the same size with 1 if wet and 0 if dry
+        '''
+
+        wgt_int = (self.qx * np.array(self.dxn_ivec)[:,np.newaxis,np.newaxis] + \
+            self.qy * np.array(self.dxn_jvec)[:,np.newaxis,np.newaxis]) / \
+            np.array(self.dxn_dist)[:,np.newaxis,np.newaxis]
+
+        wgt_int[1:4,0,:] = 0
+
+        wgt_int = wgt_int * wet_mask_nh
+        wgt_int[wgt_int<0] = 0
+        wgt_int_sum = np.sum(wgt_int, axis=0)
+
+        wgt_int[:,wgt_int_sum>0] = wgt_int[:,wgt_int_sum>0]/wgt_int_sum[wgt_int_sum>0]
+
+        return wgt_int       
 
     #############################################
     ############### randomization ###############
@@ -333,6 +849,20 @@ class Tools(object):
             
         return idx
 
+
+    def random_pick_flat(self, probs):
+        '''
+        Randomly pick a number weighted by array probs (len 8)
+        Return the index of the selected weight in array probs
+        '''
+
+        if np.max(probs) == 0:
+            probs = np.array([1./8 for i in range(8)])
+
+        cutoffs = np.cumsum(probs)
+        idx = cutoffs.searchsorted(np.random.uniform(0, cutoffs[-1]))
+
+        return idx
 
 
     def random_pick_inlet(self, choices, probs = None):
@@ -482,7 +1012,26 @@ class Tools(object):
             if (stage_nh > eta_shore[i]).any():
                 self.stage[shore_ind[0][i],shore_ind[1][i]] = max(stage_nh)
 
+    def topo_diffusion(self):
+        '''
+        Diffuse topography after routing all coarse sediment parcels
+        '''
 
+        wgt_cell_type = self.build_weight_array(self.cell_type > -2)
+        wgt_qs = self.build_weight_array(self.qs) + self.qs
+        wet_mask_nh = self.get_wet_mask_nh()
+
+        multiplier = self.dt/self.N_crossdiff * self.alpha * 0.5 / self.dx**2
+
+        for n in range(self.N_crossdiff):
+
+            wgt_eta = self.build_weight_array(self.eta) - self.eta
+
+            crossflux_nb = multiplier * wgt_qs * wgt_eta * wet_mask_nh
+            
+            crossflux = np.sum(crossflux_nb, axis=0)
+            
+            self.eta[:] = self.eta + crossflux
 
     #############################################
     ################# updaters ##################
@@ -535,6 +1084,7 @@ class Tools(object):
         self.ux[~mask] = 0
         self.uy[mask]= self.uw[mask] * self.qy[mask] / self.qw[mask]
         self.uy[~mask] = 0
+
 
 
 
@@ -755,9 +1305,20 @@ class Tools(object):
         self.jwalk = np.array([[-1, -1, -1],
                                [0, 0, 0],
                                [1, 1, 1]])
-
+                               
                                    
-      
+        self.dxn_iwalk = [1,1,0,-1,-1,-1,0,1]
+        self.dxn_jwalk = [0,1,1,1,0,-1,-1,-1]
+        self.dxn_dist = \
+        [sqrt(self.dxn_iwalk[i]**2 + self.dxn_jwalk[i]**2) for i in range(8)]
+    
+        SQ05 = sqrt(0.5)
+        self.dxn_ivec = [0,-SQ05,-1,-SQ05,0,SQ05,1,SQ05]
+        self.dxn_jvec = [1,SQ05,0,-SQ05,-1,-SQ05,0,SQ05]
+
+        self.walk_flat = np.array([1, -self.W+1, -self.W, -self.W-1, -1, self.W-1, self.W, self.W+1])
+        self.walk = np.array([[0,1], [-SQ05, SQ05], [-1,0], [-SQ05,-SQ05], 
+                              [0,-1], [SQ05,-SQ05], [1,0], [SQ05,SQ05]])
         
     def create_other_variables(self):
     
@@ -787,7 +1348,7 @@ class Tools(object):
 
         # (m) critial depth to switch to "dry" node
         self.dry_depth = min(0.1, 0.1*self.h0)
-        self.CTR = floor(self.W / 2.)
+        self.CTR = floor(self.W / 2.) - 1
 
         self.gamma = self.g * self.S0 * self.dx / (self.u0**2)
 
@@ -842,11 +1403,11 @@ class Tools(object):
 
         self.x, self.y = np.meshgrid(np.arange(0,self.W), np.arange(0,self.L))
     
-        self.cell_type = np.zeros((self.L,self.W))
+        self.cell_type = np.zeros((self.L,self.W), dtype=np.int)
     
         self.eta = np.zeros((self.L,self.W)).astype(np.float32)
-        self.stage = np.zeros((self.L,self.W))
-        self.depth = np.zeros((self.L,self.W))
+        self.stage = np.zeros((self.L,self.W)).astype(np.float32)
+        self.depth = np.zeros((self.L,self.W)).astype(np.float32)
 
         self.qx = np.zeros((self.L,self.W))
         self.qy = np.zeros((self.L,self.W))
@@ -871,9 +1432,9 @@ class Tools(object):
         
         self.cell_type[:self.L0,:] = cell_land
         
-        channel_inds = int(self.CTR - round(self.N0 / 2)) - 1
+        channel_inds = int(self.CTR - round(self.N0 / 2)) + 1
         
-        y_channel_max = channel_inds + self.N0 + 1
+        y_channel_max = channel_inds + self.N0
         self.cell_type[:self.L0, channel_inds:y_channel_max] = cell_channel
 
         self.stage[:] = np.maximum(0, self.L0 - self.y - 1) * self.dx * self.S0
@@ -903,6 +1464,9 @@ class Tools(object):
         bounds =  np.reshape(bounds,(self.L, self.W))
         
         self.cell_type[bounds >= min(self.L - 5, self.W/2 - 5)] = cell_edge
+        
+        self.cell_type[:self.L0,:] = -cell_land
+        self.cell_type[:self.L0, channel_inds:y_channel_max] = cell_channel
         
     
         self.inlet = list(np.unique(np.where(self.cell_type == 1)[1]))

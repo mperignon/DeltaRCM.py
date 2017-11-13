@@ -15,15 +15,16 @@ import pdb
     
 #commonly changed inputs        
 f_bedload = 0.5 #% of sand
-totaltimestep = 1
+totaltimestep = 100
 L = 40  #domain size (# of cells in x-direction); typically on order of 100
 W = 80 #domain size (# of cells in y-direction); W = 2L for semicircle growth
-plotinterval = 10 
-plotintervalstrat = 500 #record strata less frequently
-runID = 7
+plotinterval = 100
+plotintervalstrat = 100 #record strata less frequently
+runID = 1
 itermax = 1 # # of interations of water routing
 Np_water = 1000 # number of water parcels; typically 2000
 Np_sed = 500 # number of sediment parcels
+
 
 #operations used in the model 
 
@@ -106,8 +107,8 @@ class model_steps(object):
         '''set up subsidence'''
     
         self.sigma = np.zeros((L,W))
-        sigma_max = 0.0 * self.h0 / 1000
-        sigma_min = -0.0 * self.h0 / 1000
+        sigma_max = 0.0 * self.h0 / 1000.
+        sigma_min = -0.0 * self.h0 / 1000.
         
         sigma = [(j / W * (sigma_max - sigma_min) + sigma_min)
             for i in range(3,L)
@@ -127,7 +128,7 @@ class model_steps(object):
     
         self.CTR = int((W - 1) / 2) # center cell
         
-        N0 = 5 # num of inlet cells
+        N0 = 4 # num of inlet cells
         
         self.omega_flow_iter = 2 * 1 / itermax 
         
@@ -144,7 +145,7 @@ class model_steps(object):
         #(m) characteristic flow depth/inlet channel depth
         #typically m to tens of m
         
-        self.S0 = 0.0003 * f_bedload + 0.0001 * (1 - f_bedload)
+        self.S0 = 0.0002#0.0003 * f_bedload + 0.0001 * (1 - f_bedload)
         #characteristic topographic slope; typically 10^-4-10^-5
         
         V0 = self.h0 * (self.dx**2)
@@ -248,7 +249,7 @@ class model_steps(object):
         #smoothing water surface
         #####################################################################
         
-        self.Nsmooth = 10 #iteration of surface smoothing per timestep
+        self.Nsmooth = 1 #iteration of surface smoothing per timestep
         self.Csmooth = 0.9 #center-weighted surface smoothing
         
         
@@ -354,7 +355,7 @@ class model_steps(object):
         self.uw[self.h>0] = self.qw[self.h>0] / self.h[self.h>0]
         
         self.direction_setup()        
-        self.subsidence_setup()
+#         self.subsidence_setup()
         
         self.wet_flag = np.zeros((L,W))
         
@@ -396,40 +397,40 @@ class model_steps(object):
         self.qs = np.zeros((L,W))
         
         
-#         
-#         #####################################################################
-#         #prepare to record strata
-#         #####################################################################
-#         
-#         self.z0 = self.H_SL - self.h0 * strataBtm #bottom layer elevation
-#         
-#         self.dz = 0.01 * self.h0  #layer thickness
-#         
-#         zmax = int(round((self.H_SL +
-#                           self.SLR * totaltimestep * self.dt +
-#                           self.S0 * L / 2 * self.dx -
-#                           self.z0) / self.dz)) # max layer number
-#         
-#         strata0 = -1 # default value of none
-#         
-#         self.strata = np.ones((L, W, zmax)) * strata0
-#         
-#         
-#         
-#         topz = np.zeros((L,W), dtype = np.int) #surface layer number
-#         topz = np.rint((self.eta - self.z0) / self.dz)
-#         topz[topz < 1] = 1
-#         topz[topz > zmax] = zmax
-#         
-#         self.zmax = zmax
-#         self.topz = topz
-#         
-#         self.strata_age = np.zeros((L,W))
-#         self.sand_frac = 0.5 + np.zeros((L,W))
-#         
-#         
-#         
-#         
+        
+        #####################################################################
+        #prepare to record strata
+        #####################################################################
+        
+        self.z0 = self.H_SL - self.h0 * strataBtm #bottom layer elevation
+        
+        self.dz = 0.01 * self.h0  #layer thickness
+        
+        zmax = int(round((self.H_SL +
+                          self.SLR * totaltimestep * self.dt +
+                          self.S0 * L / 2 * self.dx -
+                          self.z0) / self.dz)) # max layer number
+        
+        strata0 = -1 # default value of none
+        
+        self.strata = np.ones((L, W, zmax)) * strata0
+        
+        
+        
+        topz = np.zeros((L,W), dtype = np.int) #surface layer number
+        topz = np.rint((self.eta - self.z0) / self.dz)
+        topz[topz < 1] = 1
+        topz[topz > zmax] = zmax
+        
+        self.zmax = zmax
+        self.topz = topz
+        
+        self.strata_age = np.zeros((L,W))
+        self.sand_frac = 0.5 + np.zeros((L,W))
+        
+        
+        
+        
         
         
         
@@ -592,9 +593,7 @@ class model_steps(object):
         if self.prepath_flag[self.px,self.py] == 1 and it > self.L0:
             #if cell has already been visited
             
-            print 'looped!'
-            
-            self.looped += 1
+            self.looped[self.px,self.py] += 1
             
             self.sfccredit = 0
             
@@ -612,6 +611,7 @@ class model_steps(object):
             
             self.py = max(1, self.py)
             self.py = int(min(W - 2, self.py))
+            
             
         
         
@@ -835,6 +835,9 @@ class model_steps(object):
         if ((self.boundflag[int(self.iseq[itback]),int(self.jseq[itback])] == 1)
             and (self.sfccredit == 1)):
             
+            
+            self.count += 1 
+            
             Hnew[int(self.iseq[itback]),int(self.jseq[itback])] = self.H_SL
             #if cell is in ocean, H = H_SL (downstream boundary condition)
             
@@ -971,7 +974,10 @@ class model_steps(object):
                             
         Hsmth = Htemp
         
+        
+        
         if timestep > 1:
+            print 'timeestep', timestep
         
             self.H = (1 - self.omega_sfc) * self.H + self.omega_sfc * Hsmth
             #underrelaxation (damping for numerical stability)
@@ -1049,7 +1055,7 @@ class model_steps(object):
     def water_route(self, timestep):
         '''route all water parcels'''
         
-        self.looped = 0
+        self.looped = np.zeros_like(self.qxn)
         
         for itr in range(1, itermax+1):
         
@@ -1065,15 +1071,19 @@ class model_steps(object):
             
             self.indices = np.zeros((Np_water, 240), dtype = np.int)
             
+            self.count = 0
             
             for n in range(1, Np_water+1):
             
+                
+            
                 it = self.route_parcel(n)
-#                 self.free_surf(it)
+                self.free_surf(it)
+
                 
             print('np = %d' %n)
             
-#             self.update_water(timestep, itr)
+            self.update_water(timestep, itr)
         
         
         
@@ -1493,11 +1503,11 @@ class model_steps(object):
                 
                 
         #### MP: remove hardwired subsidence start
-        if timestep > 1000:
-            #subsidence
-        
-            self.eta = self.eta - self.sigma
-            self.h = self.H - self.eta
+#         if timestep > 1000:
+#             #subsidence
+#         
+#             self.eta = self.eta - self.sigma
+#             self.h = self.H - self.eta
             
 
 
@@ -1582,8 +1592,8 @@ class model_steps(object):
         '''run one model timestep'''
         
         self.water_route(timestep)
-#         self.sed_route()
-#         self.update_sed(timestep)
+        self.sed_route()
+        self.update_sed(timestep)
 
 
 
@@ -1610,7 +1620,7 @@ class DeltaRCM(model_steps):
     def __init__(self):
         self.setup()   
       
-#       
+      
 #       
 # delta = DeltaRCM()
 # delta.run() #run the model

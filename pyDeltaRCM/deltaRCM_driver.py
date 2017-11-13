@@ -4,7 +4,6 @@ import logging
 from .deltaRCM_tools import Tools
 import datetime
 
-import deltaRCM_aux as Aux
 
 class pyDeltaRCM(Tools):
 
