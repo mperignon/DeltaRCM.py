@@ -25,8 +25,6 @@ class Tools(object):
         Run the time loop once
         '''
         
-        self.Nsmooth = 1
-        
         timestep = self._time
 
         if self.verbose:
@@ -39,30 +37,15 @@ class Tools(object):
             self.count = 0
 
             self.init_water_iteration()
-            
             self.run_water_iteration()
+
+            self.free_surf(iteration)            
+            self.finalize_water_iteration(timestep,iteration)
             
-            ########################################
-            # Not calculating water surface profiles
-            ########################################
-#             if timestep>0:
-#                 self.get_profiles()
- 
-#             self.finalize_water_iteration(iteration)
-
-            self.free_surf(iteration)
-            self.update_water(timestep, iteration)
-#             
-# 
-#         self.init_sed_timestep()
-# 
-#         self.one_coarse_timestep()
-#         self.one_fine_timestep()
-
         self.sed_route()
-        self.update_sed(timestep)
 
 #################################
+
 
 
 
@@ -72,13 +55,15 @@ class Tools(object):
         self.pad_depth = np.pad(self.depth, 1, 'constant',
                                 constant_values=(0))
         
-        self.qs = 0 * self.qs
-        
-        self.Vp_dep_sand = 0 * self.Vp_dep_sand
-        self.Vp_dep_mud = 0 * self.Vp_dep_mud
+        self.qs[:] = 0
+        self.Vp_dep_sand[:] = 0
+        self.Vp_dep_mud[:] = 0
         
         self.sand_route()
         self.mud_route()
+
+
+
 
 
 
@@ -237,7 +222,6 @@ class Tools(object):
             self.erode(Vp_ero,px,py)
             
             
-            
         self.Vp_dep_mud[px,py] = self.Vp_dep_mud[px,py] + Vp_dep
             
             
@@ -248,7 +232,6 @@ class Tools(object):
         '''route one sediment parcel'''
         
         it = 0
-        
         sed_continue = 1
         
         
@@ -256,7 +239,6 @@ class Tools(object):
             #choose next with weights
             
             it += 1
-            
             ind = (px,py)
             
             depth_ind = self.pad_depth[ind[0]-1+1:ind[0]+2+1, ind[1]-1+1:ind[1]+2+1]
@@ -265,20 +247,17 @@ class Tools(object):
             w1 = np.maximum(0, (self.qx[ind] * self.jvec +
                            self.qy[ind] * self.ivec))
             w2 = depth_ind ** theta_sed
-
             weight = (w1 * w2 / self.distances)
-
 
             weight[depth_ind <= self.dry_depth] = 0.0001
             weight[cell_type_ind == -2] = np.nan
             
+            
             if ind[0] == 0:
                 weight[0,:] = np.nan
                 
-            
-
+                
             new_cell = self.random_pick(weight)
-
             
             jstep = self.iwalk.flat[new_cell]
             istep = self.jwalk.flat[new_cell]
@@ -288,41 +267,34 @@ class Tools(object):
             ########################################################
             #deposition and erosion
             ########################################################
-            if sed == 1: #sand
+            if sed == 'sand': #sand
             
                 if dist > 0:
-                
+                    # deposition in current cell
                     self.qs[px,py] = (self.qs[px,py] +
                                       self.Vp_res / 2 / self.dt / self.dx)
-                    #exit accumulation
                     
                 px = px + istep
                 py = py + jstep
                 
-                
                 if dist > 0:
-                
+                    # deposition in downstream cell
                     self.qs[px,py] = (self.qs[px,py] + 
                                       self.Vp_res / 2 / self.dt / self.dx)
-                    #entry accumulation
-                    
                     
                 self.sand_dep_ero(px,py)
-                
-                if self.cell_type[px,py] == -1:
-                    sed_continue = 0 
+                  
                     
-                    
-                    
-            if sed == 2: #mud
+            if sed == 'mud': #mud
             
                 px = px + istep
                 py = py + jstep
                 
                 self.mud_dep_ero(px,py)
                 
-                if self.cell_type[px,py] == -1:
-                    sed_continue = 0 
+                
+            if self.cell_type[px,py] == -1:
+                sed_continue = 0 
 
 
 
@@ -339,8 +311,7 @@ class Tools(object):
         start_indices = map(lambda x: self.random_pick_inlet(self.inlet),
                                       range(num_starts))
                                       
-        np_sed = 0
-        
+
         for np_sed in xrange(int(self.Np_sed * self.f_bedload)):
         
             self.Vp_res = self.Vp_sed
@@ -353,12 +324,11 @@ class Tools(object):
             self.qs[px,py] = (self.qs[px,py] +
                               self.Vp_res / 2. / self.dt / self.dx)
                               
-            self.sed_parcel(theta_sed, 1, px, py)
-            #### MP: originally self.sed_parcel(theta_sed,1.px,py)
-            
-        print('np_sand = %d' %np_sed)
+            self.sed_parcel(theta_sed, 'sand', px, py)
         
-        
+
+
+        ### %% TO DO %% replace with topo diffusion        
         
         #####################################################################
         #topo diffusion
@@ -413,9 +383,6 @@ class Tools(object):
         num_starts = int(self.Np_sed * (1-self.f_bedload))
         start_indices = map(lambda x: self.random_pick_inlet(self.inlet),
                                       range(num_starts))
-                                      
-        np_sed = 0
-        
         
         for np_sed in xrange(int(self.Np_sed * (1 - self.f_bedload))):
         
@@ -424,10 +391,7 @@ class Tools(object):
             px = 0
             py = start_indices[np_sed]
             
-            self.sed_parcel(theta_sed, 2, px, py)
-            
-            
-        print('np_mud = %d' %np_sed)
+            self.sed_parcel(theta_sed, 'mud', px, py)
     
     
     
@@ -436,78 +400,40 @@ class Tools(object):
     
     
     
-    def update_sed(self,timestep):
-        '''updates after sediment routing
-           save stratigraphy'''
-           
-           
-        loc = self.Vp_dep_sand > 0
-        self.sand_frac[loc] = (self.Vp_dep_sand[loc] /
-                               (self.Vp_dep_mud[loc] + self.Vp_dep_sand[loc]))
-        
-        
-        self.sand_frac[self.Vp_dep_sand<0] = 0
-        
-        
-        #####################################################################
-        #save strata
-        #####################################################################
-        
-#         for px in xrange(self.L):
+#     def update_sed(self,timestep):
+#         '''updates after sediment routing
+#            save stratigraphy'''
+#            
+#  
+# 
+#         self.flooding_correction()
 #         
-#             for py in range(self.W):
-#             
-#                 zn = round((self.eta[px,py] - self.z0) / self.dz) 
-#                 
-#                 zn = max(1,zn)
-#                 
-#                 if zn > self.zmax:
-#                     pdb.set_trace() #### MP: replace with assertion
-#                     
-#                     
-#                 if zn >= self.topz[px,py]:
-#                 
-#                     for z in range(int(self.topz[px,py]),int(zn)+1):
-#                         #+1 makes inclusive
-#                         
-#                         self.strata[px,py,z-1] = self.sand_frac[px,py] 
-#                        
-#                        
-#                         
-#                 else:
-#                 
-#                     for z in range(int(zn),int(self.topz[px,py])+1):
-#                         #+1 makes inclusive
-#                         
-#                         self.strata[px,py,z - 1] = -1 
-#                         
-#                         
-#                     self.sand_frac[px,py] = self.strata[px,py,max(0,z -  2)]
-#                     #max(1,z-1)
-#                     
-#                     
-#                 self.topz[px,py] = zn
-                
-                
-                
-        #### MP: remove hardwired subsidence start
-#         if timestep > 1000:
-#             #subsidence
+#         self.depth = self.stage - self.eta
 #         
-#             self.eta = self.eta - self.sigma
-#             self.h = self.H - self.eta
-            
+#         self.eta.flat[self.inlet] = (
+#                     self.stage.flat[self.inlet] - self.h0)
+#         #upstream boundary condition - constant depth
+#         
+#         self.H_SL = self.H_SL + self.SLR * self.dt #sea level rise
 
 
+
+    def finalize_timestep(self):
+        '''
+        Clean up after sediment routing
+        Update sea level if baselevel changes
+        '''
+        
         self.flooding_correction()
+        self.stage[:] = np.maximum(self.stage, self.H_SL)
+        self.depth[:] = np.maximum(self.stage - self.eta, 0)
+
+        self.eta[0,self.inlet] = self.stage[0, self.inlet] - self.h0
+        self.depth[0,self.inlet] = self.h0
+
+        self.H_SL = self.H_SL + self.SLR * self.dt
         
-        self.depth = self.stage - self.eta
-        
-        self.eta.flat[self.inlet] = (
-                    self.stage.flat[self.inlet] - self.h0)
-        #upstream boundary condition - constant depth
-        
-        self.H_SL = self.H_SL + self.SLR * self.dt #sea level rise
+
 
 
 
@@ -520,43 +446,6 @@ class Tools(object):
         
         return inbr, jnbr
         
-
-
-    
-    def choose_prob(self, weight, nk, sed, px, py):
-        '''choose next step
-        based on weights of neighbors and a random number'''
-    
-        weight = weight / np.add.reduce(weight)
-        
-        weight_val = [np.add.reduce(weight[0:k+1]) for k in range(nk)]
-        
-        
-        
-        if sed > 0:
-            step_rand = 1-np.random.random() #sed routing
-            
-        else:
-            step_rand = np.random.random() #water routing
-            
-            
-            
-        dxn = [self.get_dxn(px,py,k) for k in range(nk)]
-        
-        for k in xrange(nk):
-            #dxn = self.get_dxn(px,py,k)
-            
-            if step_rand < weight_val[k]:
-                #move into first cell that's weight is more than random #
-                
-                istep = self.dxn_iwalk[dxn[k]-1]
-                jstep = self.dxn_jwalk[dxn[k]-1]
-                
-                
-                break
-                
-                
-        return istep,jstep
 
 
 
@@ -576,6 +465,7 @@ class Tools(object):
         '''get direction of neighbor i,j,k'''
         
         return int(self.nbr[i,j,k])
+
 
 
 
@@ -655,18 +545,6 @@ class Tools(object):
 
 
 
-
-
-
-
-
-
-
-
-
-
-##################################
-
     def free_surf(self, it):
         '''calculate free surface after routing one water parcel'''
         
@@ -676,20 +554,16 @@ class Tools(object):
         for n,i in enumerate(self.indices):
         
             inds = np.unravel_index(i[i > 0], self.depth.shape)
-            xs = inds[0]
-            ys = inds[1]
+            xs, ys = inds
 
             Hnew[:] = 0
         
             if ((self.cell_type[xs[-1],ys[-1]] == -1) and
                 (self.looped[n] == 0)):
-#                 (self.free_surf_flag[n] == 1)):
                 
                 self.count += 1
-            
                 Hnew[xs[-1],ys[-1]] = self.H_SL
                 #if cell is in ocean, H = H_SL (downstream boundary condition)
-            
             
                 it0 = 0
             
@@ -745,7 +619,7 @@ class Tools(object):
 
     def update_water(self,timestep,itr):
         '''update surface after routing all parcels
-        ##could divide into 3 functions for cleanliness'''
+        could divide into 3 functions for cleanliness'''
         
         #####################################################################
         # update free surface
@@ -799,81 +673,11 @@ class Tools(object):
                             
         Hsmth = Htemp
         
-        
-        
         if timestep > 0:
-        
             self.stage = ((1 - self.omega_sfc) * self.stage +
                           self.omega_sfc * Hsmth)
-            #underrelaxation (damping for numerical stability)
-            
-            
             
         self.flooding_correction()
-        
-        self.depth = self.stage - self.eta
-        self.depth[self.depth<0] = 0
-        
-        
-        #####################################################################
-        #flow field and velocity field
-        #####################################################################
-        
-        #update flow field
-        dloc = np.sqrt(self.qxn**2 + self.qyn**2)
-        
-        self.qxn[dloc>0] = self.qwn[dloc>0] * self.qxn[dloc>0] / dloc[dloc>0]
-        self.qyn[dloc>0] = self.qwn[dloc>0] * self.qyn[dloc>0] / dloc[dloc>0]
-        
-        
-        if timestep > 0:
-        
-            if itr == 0:
-            
-                self.qx = (self.qxn * self.omega_flow +
-                           self.qx * (1 - self.omega_flow))
-                           
-                self.qy = (self.qyn * self.omega_flow + 
-                           self.qy * (1 - self.omega_flow))
-                
-            else:
-            
-                self.qx = (self.qxn * self.omega_flow_iter +
-                          self.qx * (1 - self.omega_flow_iter))
-                          
-                self.qy = (self.qyn * self.omega_flow_iter +
-                           self.qy * (1 - self.omega_flow_iter))
-                           
-        else:
-        
-            self.qx = self.qxn.copy()
-            self.qy = self.qyn.copy()
-            
-            
-        self.qw = np.sqrt(self.qx**2 + self.qy**2)
-        
-        
-        #apply upstream constant flux boundary condition
-        self.qx.flat[self.inlet] = self.qw0
-        self.qy.flat[self.inlet] = 0
-        self.qw.flat[self.inlet] = self.qw0
-        
-        
-        
-        #update velocity field
-        loc = (self.depth > self.dry_depth) & (self.qw > 0)
-        
-        self.uw[loc] = np.minimum(self.u_max, self.qw[loc] / self.depth[loc])
-        self.uw[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0
-        
-        self.ux[loc] = self.uw[loc] * self.qx[loc] / self.qw[loc]
-        self.uy[loc] = self.uw[loc] * self.qy[loc] / self.qw[loc]
-        
-        
-        #set velocity of dry cells to zero
-#         self.ux[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0
-#         self.uy[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0
-#         self.uw[(self.depth <= self.dry_depth) | (self.qw <= 0)] = 0   
         
         
         
@@ -887,22 +691,17 @@ class Tools(object):
 
         self.qxn[:] = 0; self.qyn[:] = 0; self.qwn[:] = 0
         
+        self.free_surf_flag[:] = 0
+        self.indices[:] = 0
+        self.sfc_visit[:] = 0
+        self.sfc_sum[:] = 0
+        
 
-        self.indices = np.zeros((self.Np_water, self.size_indices),
-                       dtype = np.int)
-        
-        self.free_surf_flag = np.zeros((self.Np_water,), dtype=np.int)
-        
-        self.sfc_visit = np.zeros_like(self.depth)
-        self.sfc_sum = np.zeros_like(self.depth)
-        
         self.pad_stage = np.pad(self.stage, 1, 'constant',               
                                 constant_values=(0))
 
-
         self.pad_depth = np.pad(self.depth, 1, 'constant',
                                 constant_values=(0))
-#         self.pad_depth[self.pad_depth < 0.01] = np.nan
 
         self.pad_cell_type = np.pad(self.cell_type, 1, 'constant',
                                 constant_values=(-2))
@@ -916,16 +715,13 @@ class Tools(object):
         start_indices = map(lambda x: self.random_pick_inlet(self.inlet),
                                       range(self.Np_water))
                                       
-        
         self.qxn.flat[start_indices] += 1
         self.qwn.flat[start_indices] += self.Qp_water / self.dx / 2.
 
         self.indices[:,0] = start_indices
-        
-        
         current_inds = list(start_indices)
         
-        self.looped = np.zeros((self.Np_water,))
+        self.looped[:] = 0
 
         
         while (sum(current_inds) > 0) & (iter < self.itmax):
@@ -980,9 +776,6 @@ class Tools(object):
         
         inds[self.free_surf_flag == 2] = 0
         
-#         inds[self.free_surf_flag == 1] = 0
-        
-        
         return inds
         
         
@@ -991,7 +784,6 @@ class Tools(object):
     
         looped = [len(i[i>0]) != len(set(i[i>0])) for i in self.indices]
         
-
         for n in range(self.Np_water):
         
             ind = inds[n]
@@ -1002,8 +794,7 @@ class Tools(object):
         
                 it = np.unravel_index(ind, self.depth.shape)
     
-                px = it[0]
-                py = it[1]
+                px, py = it
     
                 Fx = px - 1
                 Fy = py - self.CTR
@@ -1027,7 +818,6 @@ class Tools(object):
                 self.free_surf_flag[n] = -1
                     
         
-            
         return inds
         
 
@@ -1072,15 +862,13 @@ class Tools(object):
         
         weight_sfc = np.maximum(0,
                      (self.stage[ind] - stage_ind) / self.distances)
-        
-        if ind[0] == 0:
-            weight_sfc[0,:] = 0
-
 
         weight_int = np.maximum(0, (self.qx[ind] * self.jvec +
                                     self.qy[ind] * self.ivec) / self.distances)
+
         
         if ind[0] == 0:
+            weight_sfc[0,:] = 0
             weight_int[0,:] = 0
         
         
@@ -1091,7 +879,6 @@ class Tools(object):
         weight_int[(depth_ind <= self.dry_depth) | (ct_ind == -2)] = 0
         
         
-        
         if np.nansum(weight_sfc) > 0:
             weight_sfc = weight_sfc / np.nansum(weight_sfc)
         
@@ -1099,21 +886,9 @@ class Tools(object):
             weight_int = weight_int / np.nansum(weight_int)
             
             
-        
-        
-    
         self.weight = self.gamma * weight_sfc + (1 - self.gamma) * weight_int
-        
-    
-        
-        
-        weight_alt = depth_ind ** self.theta_water * self.weight
-        
-        self.weight[depth_ind > self.dry_depth] = weight_alt[depth_ind > self.dry_depth]
-        
-        
+        self.weight = depth_ind ** self.theta_water * self.weight      
         self.weight[depth_ind <= self.dry_depth] = np.nan
-        
         
         new_cell = self.random_pick(self.weight)
     
@@ -1123,11 +898,13 @@ class Tools(object):
 
 
 
-    def finalize_water_iteration(self, iteration):
+    def finalize_water_iteration(self, timestep, iteration):
         '''
         Finish updating flow fields
         Clean up at end of water iteration
         '''
+        
+        self.update_water(timestep, iteration)
         
         self.stage[:] = np.maximum(self.stage, self.H_SL)
         self.depth[:] = np.maximum(self.stage - self.eta, 0)
@@ -1443,33 +1220,12 @@ class Tools(object):
             probs[~np.isnan(probs)] = 1
             probs[1,1] = 0
     
-        probs[np.isnan(probs)] = 0
-
-#         if np.sum(probs) > 0:
-    
+        probs[np.isnan(probs)] = 0    
         cutoffs = np.cumsum(probs)
         idx = cutoffs.searchsorted(np.random.uniform(0, cutoffs[-1]))
     
-#         else:
-#     
-#             idx = 4
-            
         return idx
 
-# 
-#     def random_pick_flat(self, probs):
-#         '''
-#         Randomly pick a number weighted by array probs (len 8)
-#         Return the index of the selected weight in array probs
-#         '''
-# 
-#         if np.max(probs) == 0:
-#             probs = np.array([1./8 for i in range(8)])
-# 
-#         cutoffs = np.cumsum(probs)
-#         idx = cutoffs.searchsorted(np.random.uniform(0, cutoffs[-1]))
-# 
-#         return idx
 
 
     def random_pick_inlet(self, choices, probs = None):
@@ -1552,36 +1308,36 @@ class Tools(object):
 
 
 
-
-
-    #############################################
-    ################# smoothing #################
-    #############################################
-
-    def smoothing_filter(self, stageTemp):
-        '''
-        Smooth water surface
-
-        If any of the cells in a 9-cell window are wet, apply this filter
-
-        stageTemp : water surface
-        stageT : smoothed water surface
-        '''
-
-        stageT = stageTemp.copy()
-        wet_mask = self.depth > self.dry_depth
-
-        for t in range(self.Nsmooth):
-
-            local_mean = ndimage.uniform_filter(stageT)
-
-            stageT[wet_mask] = self.Csmooth * stageT[wet_mask] + \
-                (1-self.Csmooth) * local_mean[wet_mask]
-
-        returnval = (1-self.omega_sfc) * self.stage + self.omega_sfc * stageT
-        
-
-        return returnval
+# 
+# 
+#     #############################################
+#     ################# smoothing #################
+#     #############################################
+# 
+#     def smoothing_filter(self, stageTemp):
+#         '''
+#         Smooth water surface
+# 
+#         If any of the cells in a 9-cell window are wet, apply this filter
+# 
+#         stageTemp : water surface
+#         stageT : smoothed water surface
+#         '''
+# 
+#         stageT = stageTemp.copy()
+#         wet_mask = self.depth > self.dry_depth
+# 
+#         for t in range(self.Nsmooth):
+# 
+#             local_mean = ndimage.uniform_filter(stageT)
+# 
+#             stageT[wet_mask] = self.Csmooth * stageT[wet_mask] + \
+#                 (1-self.Csmooth) * local_mean[wet_mask]
+# 
+#         returnval = (1-self.omega_sfc) * self.stage + self.omega_sfc * stageT
+#         
+# 
+#         return returnval
 
 
 
@@ -1619,6 +1375,8 @@ class Tools(object):
             if (stage_nh > eta_shore[i]).any():
                 self.stage[shore_ind[0][i],shore_ind[1][i]] = max(stage_nh)
 
+
+
     def topo_diffusion(self):
         '''
         Diffuse topography after routing all coarse sediment parcels
@@ -1639,6 +1397,8 @@ class Tools(object):
             crossflux = np.sum(crossflux_nb, axis=0)
             
             self.eta[:] = self.eta + crossflux
+
+
 
     #############################################
     ################# updaters ##################
@@ -1663,16 +1423,18 @@ class Tools(object):
         if timestep > 0:
 
             omega = self.omega_flow_iter
+            
             if iteration == 0: omega = self.omega_flow
 
             self.qx = self.qxn*omega + self.qx*(1-omega)
             self.qy = self.qyn*omega + self.qy*(1-omega)
 
         else:
-
-            self.qx = self.qxn.copy(); self.qy = self.qyn.copy()
+            self.qx = self.qxn.copy()
+            self.qy = self.qyn.copy()
 
         self.qw = (self.qx**2 + self.qy**2)**(0.5)
+        
         self.qx[0,self.inlet] = self.qw0
         self.qy[0,self.inlet] = 0
         self.qw[0,self.inlet] = self.qw0
@@ -1685,122 +1447,14 @@ class Tools(object):
         '''
 
         mask = (self.depth > self.dry_depth) * (self.qw > 0)
-        self.uw[mask] = np.minimum(self.u_max, self.qw[mask] / self.depth[mask])
-        self.uw[~mask] = 0
-        self.ux[mask]= self.uw[mask] * self.qx[mask] / self.qw[mask]
-        self.ux[~mask] = 0
-        self.uy[mask]= self.uw[mask] * self.qy[mask] / self.qw[mask]
-        self.uy[~mask] = 0
+        
+        self.uw = mask * np.minimum(self.u_max, self.qw / self.depth)
+        self.ux = mask * self.uw * self.qx / self.qw
+        self.uy = mask * self.uw * self.qy / self.qw
 
 
 
-# 
-# 
-# 
-#     def get_profiles(self):
-#         '''
-#         Calculate the water surface profiles after routing flow parcels
-#         Update water surface array
-#         '''
-# 
-#         paths_for_profile = np.where(self.free_surf_flag == 1)[0]
-# 
-#         # get all the unique indices in good paths
-#         unique_cells = list(set([j for i in paths_for_profile
-#                        for j in list(set(self.indices[i]))]))
-#         try:
-#             unique_cells.remove(0)
-#         except:
-#             pass
-# 
-#         unique_cells.sort()
-# 
-#         # extract the values needed for the paths
-#         # no need to do this for the entire space
-#         uw_unique = self.uw.flat[unique_cells]
-#         depth_unique = self.depth.flat[unique_cells]
-#         ux_unique = self.ux.flat[unique_cells]
-#         uy_unique = self.uy.flat[unique_cells]
-# 
-#         profile_mask = np.add(uw_unique > 0.5*self.u0,
-#                               depth_unique < 0.1*self.h0)
-# 
-#         all_unique = zip(profile_mask,uw_unique,ux_unique,uy_unique)
-# 
-#         sfc_array = np.zeros((len(unique_cells),2))
-# 
-#         # make dictionaries to use as lookup tables
-#         lookup = {}
-#         self.sfc_change = {}
-# 
-#         for i in range(len(unique_cells)):
-#             lookup[unique_cells[i]] = all_unique[i]
-#             self.sfc_change[unique_cells[i]] = sfc_array[i]
-# 
-#         # process each profile
-#         for i in paths_for_profile:
-# 
-#             path = self.indices[i]
-#             path = path[np.where(path>0)]
-# 
-#             prf = [lookup[i][0] for i in path]
-# 
-#             # find the last True
-#             try:
-#                 last_True = (len(prf) - 1) - prf[::-1].index(True)
-#                 sub_path = path[:last_True]
-# 
-#                 sub_path_unravel = np.unravel_index(sub_path, self.eta.shape)
-# 
-#                 path_diff = np.diff(sub_path_unravel)
-#                 ux_ = [lookup[i][2] for i in sub_path[:-1]]
-#                 uy_ = [lookup[i][3] for i in sub_path[:-1]]
-#                 uw_ = [lookup[i][1] for i in sub_path[:-1]]
-# 
-#                 dH = self.S0 * (ux_ * path_diff[0] +
-#                                 uy_ * path_diff[1]) * self.dx
-#                                 
-#                 dH = [dH[i] / uw_[i] if uw_[i]>0 else 0 for i in range(len(dH))]
-#                 dH.append(0)
-# 
-#                 newH = np.zeros(len(sub_path))
-#                 for i in range(-2,-len(sub_path)-1,-1):
-#                     newH[i] = newH[i+1] + dH[i]
-# 
-#                 for i in range(len(sub_path)):
-#                     self.sfc_change[sub_path[i]] += [newH[i],1]
-#                     
-#             except:
-#                 pass
-# 
-#         stageTemp = self.eta + self.depth
-# 
-#         for k, v in self.sfc_change.iteritems():
-#             if np.max(v) > 0:
-#                 stageTemp.flat[k] = v[0]/v[1]
-# 
-#         self.stage[:] = self.smoothing_filter(stageTemp)
-# 
-# 
-# 
-# 
-# 
-#     def finalize_timestep(self):
-#         '''
-#         Clean up after sediment routing
-#         Update sea level if baselevel changes
-#         '''
-#         
-#         self.flooding_correction()
-#         self.stage[:] = np.maximum(self.stage, self.H_SL)
-#         self.depth[:] = np.maximum(self.stage - self.eta, 0)
-# 
-#         self.eta[0,self.inlet] = self.stage[0, self.inlet] - self.h0
-#         self.depth[0,self.inlet] = self.h0
-# 
-#         self.H_SL = self.H_SL + self.SLR * self.time_step
-#         
-# 
+
 
 
     #############################################
@@ -1809,7 +1463,6 @@ class Tools(object):
 
     def get_var_name(self, long_var_name): 
         return self._var_name_map[ long_var_name ]
-
 
 
     def import_file(self):
@@ -1863,7 +1516,6 @@ class Tools(object):
             setattr(self, self.get_var_name(k), v)
 
  
-        
     def set_defaults(self):
     
         for k,v in self._var_default_map.items():
@@ -1889,7 +1541,6 @@ class Tools(object):
     def set_constants(self):
 
         self.g = 9.81   # (gravitation const.)
-    
     
         sqrt2 = np.sqrt(2)
         self.distances = np.array([[sqrt2, 1, sqrt2],
@@ -1923,9 +1574,8 @@ class Tools(object):
         self.dxn_ivec = [0,-SQ05,-1,-SQ05,0,SQ05,1,SQ05]
         self.dxn_jvec = [1,SQ05,0,-SQ05,-1,-SQ05,0,SQ05]
 
-        self.walk_flat = np.array([1, -self.W+1, -self.W, -self.W-1, -1, self.W-1, self.W, self.W+1])
-#         self.walk = np.array([[0,1], [-SQ05, SQ05], [-1,0], [-SQ05,-SQ05], 
-#                               [0,-1], [SQ05,-SQ05], [1,0], [SQ05,SQ05]])
+        self.walk_flat = np.array([1, -self.W+1, -self.W, -self.W-1,
+                                    -1, self.W-1, self.W, self.W+1])
 
 
 
@@ -1939,6 +1589,7 @@ class Tools(object):
     
         self.theta_sand = self.coeff_theta_sand * self.theta_water
         self.theta_mud = self.coeff_theta_mud * self.theta_water
+        self.Nsmooth = 1
     
         self.U_dep_mud = self.coeff_U_dep_mud * self.u0
         self.U_ero_sand = self.coeff_U_ero_sand * self.u0
@@ -1990,7 +1641,7 @@ class Tools(object):
         # number of times to repeat topo diffusion
         self.N_crossdiff = int(round(self.dVs / self.V0))
         
-        self._lambda = 1. # sedimentation lag, from Lauzon
+        self._lambda = 1.                       # sedimentation lag
  
     
         # self.prefix
@@ -2003,6 +1654,7 @@ class Tools(object):
             self.prefix += self.site_prefix + '_'
         if self.case_prefix:
             self.prefix += self.case_prefix + '_'
+
 
 
 
@@ -2036,7 +1688,14 @@ class Tools(object):
         self.qs = np.zeros((self.L,self.W))
         self.Vp_dep_sand = np.zeros((self.L,self.W))
         self.Vp_dep_mud = np.zeros((self.L,self.W))
-
+        
+        self.free_surf_flag = np.zeros((self.Np_water,), dtype=np.int)
+        self.looped = np.zeros((self.Np_water,))
+        self.indices = np.zeros((self.Np_water, self.size_indices),
+                                 dtype = np.int)
+        
+        self.sfc_visit = np.zeros_like(self.depth)
+        self.sfc_sum = np.zeros_like(self.depth)
 
         ##### domain #####
         cell_land = 2
@@ -2047,7 +1706,6 @@ class Tools(object):
         self.cell_type[:self.L0,:] = cell_land
         
         channel_inds = int(self.CTR - round(self.N0 / 2)) + 1
-        
         y_channel_max = channel_inds + self.N0
         self.cell_type[:self.L0, channel_inds:y_channel_max] = cell_channel
 
@@ -2074,7 +1732,6 @@ class Tools(object):
         bounds = [(np.sqrt((i-3)**2 + (j-self.CTR)**2))
             for i in range(self.L)
             for j in range(self.W)]
-        
         bounds =  np.reshape(bounds,(self.L, self.W))
         
         self.cell_type[bounds >= min(self.L - 5, self.W/2 - 5)] = cell_edge
@@ -2083,85 +1740,47 @@ class Tools(object):
         self.cell_type[:self.L0, channel_inds:y_channel_max] = cell_channel
         
     
+    
+    
         self.inlet = list(np.unique(np.where(self.cell_type == 1)[1]))
         self.eta[:] = self.stage - self.depth
         
         self.clim_eta = (-self.h0 - 1, 0.05)
         
-#         epsilon = 0.000001
-#         
-#         self.eta[:] = self.eta + np.random.rand(self.L,self.W) * epsilon
-#         self.stage[:] = self.stage + np.random.rand(self.L,self.W) * epsilon
-#         self.depth[:] = self.depth + np.random.rand(self.L,self.W) * epsilon
+               
+    
+    
+    def init_stratigraphy(self):
+        '''
+        Creates sparse array to store stratigraphy data
+        '''
+        
+        if self.save_strata:
+        
+            self.n_steps = 10 * self.save_dt
+        
+            self.strata_sand_frac = lil_matrix((self.L * self.W, self.n_steps),
+                                                dtype=np.float32)
+            
+            self.init_eta = self.eta.copy()
+            self.strata_eta = lil_matrix((self.L * self.W, self.n_steps),
+                                          dtype=np.float32)
 
 
 
-        strataBtm = 1
-        totaltimestep = 100
-
-        #####################################################################
-        #prepare to record strata
-        #####################################################################
+    def expand_stratigraphy(self):
+        '''
+        Expand the size of arrays that store stratigraphy data
+        '''
         
-        self.z0 = self.H_SL - self.h0 * strataBtm #bottom layer elevation
+        if self.verbose: self.logger.info('Expanding stratigraphy arrays')
         
-        self.dz = 0.01 * self.h0  #layer thickness
+        lil_blank = lil_matrix((self.L * self.W, self.n_steps),
+                                dtype=np.float32)
         
-        zmax = int(round((self.H_SL +
-                          self.SLR * totaltimestep * self.dt +
-                          self.S0 * self.L / 2. * self.dx -
-                          self.z0) / self.dz)) # max layer number
-        
-        strata0 = -1 # default value of none
-        
-        self.strata = np.ones((self.L, self.W, zmax)) * strata0
-        
-        
-        
-        topz = np.zeros((self.L,self.W), dtype = np.int) #surface layer number
-        topz = np.rint((self.eta - self.z0) / self.dz)
-        topz[topz < 1] = 1
-        topz[topz > zmax] = zmax
-        
-        self.zmax = zmax
-        self.topz = topz
-        
-        self.strata_age = np.zeros((self.L,self.W))
-        self.sand_frac = 0.5 + np.zeros((self.L,self.W))
-        
-        
-#     
-#     
-#     def init_stratigraphy(self):
-#         '''
-#         Creates sparse array to store stratigraphy data
-#         '''
-#         
-#         if self.save_strata:
-#         
-#             self.n_steps = 10 * self.save_dt
-#         
-#             self.strata_sand_frac = lil_matrix((self.L * self.W, self.n_steps),
-#                                                 dtype=np.float32)
-#             
-#             self.init_eta = self.eta.copy()
-#             self.strata_eta = lil_matrix((self.L * self.W, self.n_steps),
-#                                           dtype=np.float32)
-# 
-# 
-#     def expand_stratigraphy(self):
-#         '''
-#         Expand the size of arrays that store stratigraphy data
-#         '''
-#         
-#         if self.verbose: self.logger.info('Expanding stratigraphy arrays')
-#         
-#         lil_blank = lil_matrix((self.L * self.W, self.n_steps),
-#                                 dtype=np.float32)
-#         
-#         self.strata_eta = hstack([self.strata_eta, lil_blank], format='lil')
-#         self.strata_sand_frac = hstack([self.strata_sand_frac, lil_blank],
-#                                         format='lil')
+        self.strata_eta = hstack([self.strata_eta, lil_blank], format='lil')
+        self.strata_sand_frac = hstack([self.strata_sand_frac, lil_blank],
+                                        format='lil')
 
 
 
@@ -2223,8 +1842,7 @@ class Tools(object):
 
             x[:] = self.x
             y[:] = self.y
-            
-                           
+                
             if self.save_eta_grids:
                 eta = self.output_netcdf.createVariable('eta',
                                              'f4',
@@ -2277,105 +1895,107 @@ class Tools(object):
             
             self.subsidence_mask[:self.L0,:] = False
             
-            self.sigma = self.subsidence_mask * self.sigma_max * self.time_step
+            self.sigma = self.subsidence_mask * self.sigma_max * self.dt
 
 
 
         
 
-#         
-#         
-#     def record_stratigraphy(self):
-#         '''
-#         Saves the sand fraction of deposited sediment
-#         into a sparse array created by init_stratigraphy().
-#         
-#         Only runs if save_strata is True
-#         '''
-#         
-#         timestep = self._time
-#         
-#         if self.save_strata and (timestep % self.save_dt == 0):
-#         
-#             timestep = int(timestep)
-#             
-#         
-#             if self.strata_eta.shape[1] <= timestep:
-#                 self.expand_stratigraphy()
-#         
-#             
-#             if self.verbose:
-#                 self.logger.info('Storing stratigraphy data')
-#                 
-#             ################### sand frac ###################
-#             # -1 for cells with deposition volumes < vol_limit
-#             # vol_limit for any mud (to diff from no deposition in sparse array)
-#             # (overwritten if any sand deposited)
-#             
-#             sand_frac = -1 * np.ones((self.L, self.W))
-# 
-#             vol_limit = 0.000001 # threshold deposition volume
-#             sand_frac[self.Vp_dep_mud > vol_limit] = vol_limit
-# 
-#             sand_loc = self.Vp_dep_sand > 0
-#             sand_frac[sand_loc] = (self.Vp_dep_sand[sand_loc] /
-#                                   (self.Vp_dep_mud[sand_loc] +
-#                                   self.Vp_dep_sand[sand_loc]))
-# 
-#             # store indices and sand_frac into a sparse array
-#             row_s = np.where(sand_frac.flatten() >= 0)[0]
-#             col_s = np.zeros((len(row_s),))
-#             data_s = sand_frac[sand_frac >= 0]
-# 
-#             sand_sparse = csc_matrix((data_s, (row_s, col_s)),
-#                                       shape=(self.L * self.W, 1))
-# 
-#             # store sand_sparse into strata_sand_frac
-#             self.strata_sand_frac[:,timestep] = sand_sparse
-#             
-#             
-#             ################### eta ###################
-#             
-#             diff_eta = self.eta - self.init_eta
-#             
-#             row_s = np.where(diff_eta.flatten() != 0)[0]
-#             col_s = np.zeros((len(row_s),))
-#             data_s = self.eta[diff_eta != 0]
-#            
-#             eta_sparse = csc_matrix((data_s, (row_s, col_s)),
-#                                     shape=(self.L * self.W, 1))
-#             
-#             self.strata_eta[:,timestep] = eta_sparse
-#             
-#             if self.toggle_subsidence and self.start_subsidence <= timestep:
-#             
-#                 sigma_change = (self.strata_eta[:,:timestep] -
-#                                 self.sigma.flatten()[:,np.newaxis])
-#                 self.strata_eta[:,:timestep] = lil_matrix(sigma_change)
-#             
-#         
-#         
-#         
-#         
-#         
-#     def apply_subsidence(self):
-#         '''
-#         Apply subsidence to domain if
-#         toggle_subsidence is True and
-#         start_subsidence is <= timestep
-#         '''
-#         
-#         if self.toggle_subsidence:
-#             
-#             timestep = self._time
-#         
-#             if self.start_subsidence <= timestep:
-#                 
-#                 if self.verbose:
-#                     self.logger.info('Applying subsidence')
-#             
-#                 self.eta[:] = self.eta - self.sigma
-#                 
+        
+        
+    def record_stratigraphy(self):
+        '''
+        Saves the sand fraction of deposited sediment
+        into a sparse array created by init_stratigraphy().
+        
+        Only runs if save_strata is True
+        '''
+        
+        timestep = self._time
+        
+        if self.save_strata and (timestep % self.save_dt == 0):
+        
+            timestep = int(timestep)
+            
+        
+            if self.strata_eta.shape[1] <= timestep:
+                self.expand_stratigraphy()
+        
+            
+            if self.verbose:
+                self.logger.info('Storing stratigraphy data')
+                
+            ################### sand frac ###################
+            # -1 for cells with deposition volumes < vol_limit
+            # vol_limit for any mud (to diff from no deposition in sparse array)
+            # (overwritten if any sand deposited)
+            
+            sand_frac = -1 * np.ones((self.L, self.W))
+
+            vol_limit = 0.000001 # threshold deposition volume
+            sand_frac[self.Vp_dep_mud > vol_limit] = vol_limit
+
+            sand_loc = self.Vp_dep_sand > 0
+            sand_frac[sand_loc] = (self.Vp_dep_sand[sand_loc] /
+                                  (self.Vp_dep_mud[sand_loc] +
+                                  self.Vp_dep_sand[sand_loc]))
+
+            # store indices and sand_frac into a sparse array
+            row_s = np.where(sand_frac.flatten() >= 0)[0]
+            col_s = np.zeros((len(row_s),))
+            data_s = sand_frac[sand_frac >= 0]
+
+            sand_sparse = csc_matrix((data_s, (row_s, col_s)),
+                                      shape=(self.L * self.W, 1))
+
+            # store sand_sparse into strata_sand_frac
+            self.strata_sand_frac[:,timestep] = sand_sparse
+            
+            
+            ################### eta ###################
+            
+            diff_eta = self.eta - self.init_eta
+            
+            row_s = np.where(diff_eta.flatten() != 0)[0]
+            col_s = np.zeros((len(row_s),))
+            data_s = self.eta[diff_eta != 0]
+           
+            eta_sparse = csc_matrix((data_s, (row_s, col_s)),
+                                    shape=(self.L * self.W, 1))
+            
+            self.strata_eta[:,timestep] = eta_sparse
+            
+            if self.toggle_subsidence and self.start_subsidence <= timestep:
+            
+                sigma_change = (self.strata_eta[:,:timestep] -
+                                self.sigma.flatten()[:,np.newaxis])
+                self.strata_eta[:,:timestep] = lil_matrix(sigma_change)
+            
+        
+        
+        
+        
+        
+    def apply_subsidence(self):
+        '''
+        Apply subsidence to domain if
+        toggle_subsidence is True and
+        start_subsidence is <= timestep
+        '''
+        
+        if self.toggle_subsidence:
+            
+            timestep = self._time
+        
+            if self.start_subsidence <= timestep:
+                
+                if self.verbose:
+                    self.logger.info('Applying subsidence')
+            
+                self.eta[:] = self.eta - self.sigma
+                
+        
+        
         
 
     def output_data(self):
@@ -2387,9 +2007,14 @@ class Tools(object):
 
         if timestep % self.save_dt == 0:
         
-            timestep = self._time
-            shape = self.output_netcdf.variables['time'].shape
-            self.output_netcdf.variables['time'][shape[0]] = timestep
+            if (self.save_eta_grids or
+            self.save_depth_grids or
+            self.save_stage_grids or
+            self.save_strata):
+        
+                timestep = self._time
+                shape = self.output_netcdf.variables['time'].shape
+                self.output_netcdf.variables['time'][shape[0]] = timestep
             
             ############ FIGURES #############
             if self.save_eta_figs:
@@ -2429,64 +2054,64 @@ class Tools(object):
                 self.save_grids('stage', self.stage, shape[0])                
     
     
-#     
-#     
-#     def output_strata(self):
-#         '''
-#         Saves the stratigraphy sparse matrices into output netcdf file
-#         '''
-#         
-#         if self.save_strata:
-#         
-#             if self.verbose:
-#                 self.logger.info('\nSaving final stratigraphy to netCDF file')
-#            
-#                
-#             shape = self.strata_eta.shape
-#            
-#             total_strata_age = self.output_netcdf.createDimension(
-#                                                             'total_strata_age',
-#                                                              shape[1])
-#             
-# 
-#             strata_age = self.output_netcdf.createVariable('strata_age',
-#                                                         np.int32,
-#                                                         ('total_strata_age'))
-#             strata_age.units = 'timesteps'
-#             self.output_netcdf.variables['strata_age'][:] = range(shape[1]-1, 
-#                                                                   -1, -1)
-# 
-# 
-#             sand_frac = self.output_netcdf.createVariable('strata_sand_frac',
-#                                          np.float32,
-#                                         ('total_strata_age','length','width'))
-#             sand_frac.units = 'fraction'
-# 
-# 
-#             strata_elev = self.output_netcdf.createVariable('strata_depth',
-#                                            np.float32,
-#                                           ('total_strata_age','length','width'))
-#             strata_elev.units = 'meters'
-# 
-# 
-# 
-#             for i in range(shape[1]):
-# 
-#                 sf = self.strata_sand_frac[:,i].toarray()
-#                 sf = sf.reshape(self.eta.shape)
-#                 sf[sf == 0] = -1
-# 
-#                 self.output_netcdf.variables['strata_sand_frac'][i,:,:] = sf
-# 
-#                 sz = self.strata_eta[:,i].toarray().reshape(self.eta.shape)
-#                 sz[sz == 0] = self.init_eta[sz == 0]
-# 
-#                 self.output_netcdf.variables['strata_depth'][i,:,:] = sz
-# 
-# 
-#             if self.verbose:
-#                 self.logger.info('Stratigraphy data saved.')
-# 
+    
+    
+    def output_strata(self):
+        '''
+        Saves the stratigraphy sparse matrices into output netcdf file
+        '''
+        
+        if self.save_strata:
+        
+            if self.verbose:
+                self.logger.info('\nSaving final stratigraphy to netCDF file')
+           
+               
+            shape = self.strata_eta.shape
+           
+            total_strata_age = self.output_netcdf.createDimension(
+                                                            'total_strata_age',
+                                                             shape[1])
+            
+
+            strata_age = self.output_netcdf.createVariable('strata_age',
+                                                        np.int32,
+                                                        ('total_strata_age'))
+            strata_age.units = 'timesteps'
+            self.output_netcdf.variables['strata_age'][:] = range(shape[1]-1, 
+                                                                  -1, -1)
+
+
+            sand_frac = self.output_netcdf.createVariable('strata_sand_frac',
+                                         np.float32,
+                                        ('total_strata_age','length','width'))
+            sand_frac.units = 'fraction'
+
+
+            strata_elev = self.output_netcdf.createVariable('strata_depth',
+                                           np.float32,
+                                          ('total_strata_age','length','width'))
+            strata_elev.units = 'meters'
+
+
+
+            for i in range(shape[1]):
+
+                sf = self.strata_sand_frac[:,i].toarray()
+                sf = sf.reshape(self.eta.shape)
+                sf[sf == 0] = -1
+
+                self.output_netcdf.variables['strata_sand_frac'][i,:,:] = sf
+
+                sz = self.strata_eta[:,i].toarray().reshape(self.eta.shape)
+                sz[sz == 0] = self.init_eta[sz == 0]
+
+                self.output_netcdf.variables['strata_depth'][i,:,:] = sz
+
+
+            if self.verbose:
+                self.logger.info('Stratigraphy data saved.')
+
 
 
 
