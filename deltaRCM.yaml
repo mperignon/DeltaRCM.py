@@ -25,7 +25,7 @@ model_output__opt_depth_figs: False
 model_output__opt_eta_grids: False
 model_output__opt_stage_grids: False
 model_output__opt_depth_grids: False
-model_output__opt_time_interval: 50     
+model_output__opt_time_interval: 10     
 basin__opt_stratigraphy: False            
                                             
                                             

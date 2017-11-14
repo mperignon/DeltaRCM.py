@@ -14,8 +14,8 @@ import matplotlib.pylab as plt
 import pdb
     
 #commonly changed inputs        
-f_bedload = 0.5 #% of sand
-totaltimestep = 100
+f_bedload = 1 #% of sand
+totaltimestep = 1
 L = 40  #domain size (# of cells in x-direction); typically on order of 100
 W = 80 #domain size (# of cells in y-direction); W = 2L for semicircle growth
 plotinterval = 100
@@ -1348,6 +1348,8 @@ class model_steps(object):
         
         theta_sed = self.theta_sand
         
+        np_sed = 0
+        
         for np_sed in xrange(1,int(Np_sed*f_bedload)+1):
         
             self.Vp_res = self.Vp_sed
@@ -1418,6 +1420,8 @@ class model_steps(object):
         '''route mud parcels'''
         
         theta_sed = self.theta_mud
+        
+        np_sed = 0
         
         for np_sed in xrange(1,int(Np_sed * (1 - f_bedload)) + 1):
         
@@ -1511,7 +1515,7 @@ class model_steps(object):
             
 
 
-        self.flood_corr
+        self.flood_corr()
         
         self.h = self.H - self.eta
         
